@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ラチスシェル形状スタジオ</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@400;500;700&display=swap">
+<style>
+/* Layout: instrument bench — 3D model fills the bench, a control rail on the right, readouts across the top, analysis strip below */
+:root {
+  --bg: #e9edef;
+  --panel: #ffffff;
+  --ink: #15202b;
+  --muted: #5a6672;
+  --line: #cfd6dc;
+  --accent: #0e6e66;
+  --accent-soft: #d5ebe8;
+  --tension: #c8423c;
+  --compress: #2a64b0;
+  --neutral-member: #8a96a1;
+  --ctrl: #e08a1e;
+  --font-body: "IBM Plex Sans JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --view-bg: #f6f8f9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1317; --panel: #161d23; --ink: #e2e8ed; --muted: #8e9aa5; --line: #2a343d;
+    --accent: #3cc7b8; --accent-soft: #163a37; --tension: #f0716b; --compress: #6aa3ef;
+    --neutral-member: #7d8995; --ctrl: #f2a64a; --view-bg: #11171c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1317; --panel: #161d23; --ink: #e2e8ed; --muted: #8e9aa5; --line: #2a343d;
+  --accent: #3cc7b8; --accent-soft: #163a37; --tension: #f0716b; --compress: #6aa3ef;
+  --neutral-member: #7d8995; --ctrl: #f2a64a; --view-bg: #11171c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 28px;
+}
+.wrap { max-width: 1380px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: 0.02em; text-wrap: balance; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }
+.readouts { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
+.ro { padding: 8px 16px; display: flex; flex-direction: column; min-width: 112px; border-right: 1px solid var(--line); }
+.ro:last-child { border-right: 0; }
+.ro .k { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+.ro .v { font-family: var(--font-mono); font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ro .v small { font-size: 11px; color: var(--muted); margin-left: 3px; }
+.ro.main .v { color: var(--accent); font-size: 22px; font-weight: 500; }
+
+.bench { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; }
+.view { position: relative; background: var(--view-bg); border: 1px solid var(--line); border-radius: 6px; min-height: 520px; overflow: hidden; }
+.view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.view .hint { position: absolute; left: 12px; bottom: 10px; font-size: 11.5px; color: var(--muted); pointer-events: none; }
+.legend { position: absolute; right: 12px; top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; font-size: 11px; min-width: 170px; }
+.legend .bar { height: 8px; border-radius: 2px; margin: 4px 0 2px; }
+.legend .ends { display: flex; justify-content: space-between; font-family: var(--font-mono); color: var(--muted); }
+.err { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); background: var(--tension); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12.5px; }
+
+.rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.card h2 { font-size: 12px; margin: 0; color: var(--muted); letter-spacing: 0.08em; font-weight: 500; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--ink); padding: 6px 4px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.slider { display: grid; grid-template-columns: 30px minmax(0,1fr) 58px; align-items: center; gap: 8px; }
+.slider label { font-family: var(--font-mono); font-size: 13px; }
+.slider .meta { grid-column: 2 / 4; font-size: 11px; color: var(--muted); margin-top: -8px; }
+.slider.sel label { color: var(--ctrl); font-weight: 500; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+input[type=number], select { width: 100%; font-family: var(--font-mono); font-size: 12.5px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--ink); font-variant-numeric: tabular-nums; }
+.net { display: grid; grid-template-columns: 18px repeat(5, minmax(0,1fr)); gap: 3px; font-size: 10.5px; align-items: center; }
+.net .ax { color: var(--muted); text-align: center; font-family: var(--font-mono); }
+.cell { border: 1px solid var(--line); border-radius: 3px; text-align: center; padding: 3px 0; font-family: var(--font-mono); font-size: 11px; line-height: 1.25; cursor: pointer; background: var(--bg); min-width: 0; }
+.cell b { display: block; font-weight: 500; font-size: 10px; color: var(--muted); }
+.cell.fixed { opacity: 0.55; cursor: default; }
+.cell.sel { outline: 2px solid var(--ctrl); outline-offset: -1px; }
+.cell input { width: 100%; border: 0; background: transparent; text-align: center; padding: 2px 0; font-size: 11px; }
+.row { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 4px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, .seg button:focus-visible, .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.field { display: grid; grid-template-columns: minmax(0,1fr) 92px; align-items: center; gap: 8px; font-size: 12.5px; }
+.field span small { color: var(--muted); }
+.check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.note { font-size: 11.5px; color: var(--muted); margin: 0; }
+
+.strip { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); gap: 14px; }
+.strip .card { min-height: 250px; }
+.chart { position: relative; width: 100%; height: 210px; }
+.chart canvas { width: 100%; height: 100%; display: block; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
+.toolbar select, .toolbar input { width: auto; }
+.toolbar input[type=number] { width: 64px; }
+.status { font-size: 11px; color: var(--muted); margin-left: auto; font-family: var(--font-mono); }
+
+@media (max-width: 960px) {
+  .bench { grid-template-columns: minmax(0,1fr); }
+  .view { min-height: 420px; height: 62vh; }
+  .strip { grid-template-columns: minmax(0,1fr); }
+}
+@media (min-width: 961px) { .view { height: calc(100vh - 150px); max-height: 820px; } }
+@media (max-width: 520px) { .ro { min-width: 50%; border-bottom: 1px solid var(--line); } .legend { min-width: 0; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>ラチスシェル形状スタジオ</h1>
+      <p class="sub">10×10グリッド（1マス1 m・11×11節点）・ベジエ曲面 5×5制御点・四隅固定・3次元骨組FEM（ブラウザ内で計算）</p>
+    </div>
+    <div class="readouts" aria-live="polite">
+      <div class="ro main"><span class="k">コンプライアンス C = ½fᵀu</span><span class="v" id="roC">–</span></div>
+      <div class="ro"><span class="k">最大変位</span><span class="v" id="roD">–</span></div>
+      <div class="ro"><span class="k">部材体積</span><span class="v" id="roV">–</span></div>
+      <div class="ro"><span class="k">総鉛直荷重</span><span class="v" id="roP">–</span></div>
+      <div class="ro"><span class="k">最高高さ</span><span class="v" id="roH">–</span></div>
+    </div>
+  </header>
+
+  <div class="bench">
+    <div class="view" id="view">
+      <div class="legend" id="legend"></div>
+      <div class="err" id="err" hidden></div>
+      <div class="hint">ドラッグ：回転　右ドラッグ：移動　ホイール：拡大　橙の制御点を上下ドラッグ：形状変更</div>
+    </div>
+
+    <div class="rail">
+      <section class="card">
+        <h2>形状変数</h2>
+        <div class="seg" role="group" aria-label="変数モード">
+          <button id="modeSym" aria-pressed="true">対称 5変数</button>
+          <button id="modeFree" aria-pressed="false">25点 自由</button>
+        </div>
+        <div id="symSliders" style="display:flex;flex-direction:column;gap:10px"></div>
+        <div class="net" id="net"></div>
+        <div class="row">
+          <button class="btn" id="pDome">ドーム</button>
+          <button class="btn" id="pFlat">平板</button>
+          <button class="btn" id="pVault">ヴォールト</button>
+          <button class="btn" id="pSaddle">鞍形</button>
+        </div>
+        <p class="note" id="modeNote"></p>
+      </section>
+
+      <section class="card">
+        <h2>荷重</h2>
+        <label class="check"><input type="checkbox" id="useP" checked> 全節点に鉛直荷重</label>
+        <div class="field"><span>節点荷重 P <small>kN/節点</small></span><input type="number" id="P" value="1.0" step="0.1" min="0"></div>
+        <label class="check"><input type="checkbox" id="useSW"> 自重（部材長に比例・形状依存）</label>
+      </section>
+
+      <section class="card">
+        <h2>断面・材料（鋼）</h2>
+        <div class="seg" role="group" aria-label="断面形状">
+          <button id="shSquare" aria-pressed="true">角形</button>
+          <button id="shRound" aria-pressed="false">丸形</button>
+        </div>
+        <div class="field"><span id="dLabel">幅 B <small>mm</small></span><input type="number" id="D" value="100" step="1" min="1"></div>
+        <label class="check"><input type="checkbox" id="solid" checked> 中実断面</label>
+        <div class="field"><span>板厚 t <small>mm</small></span><input type="number" id="t" value="6" step="0.1" min="0.1" disabled></div>
+        <p class="note" id="secInfo"></p>
+        <div class="field"><span>ヤング係数 E <small>N/mm²</small></span><input type="number" id="E" value="205000" step="1000" min="1"></div>
+        <div class="field"><span>ポアソン比 ν</span><input type="number" id="nu" value="0.3" step="0.01" min="0" max="0.49"></div>
+        <div class="field"><span>密度 ρ <small>kg/m³</small></span><input type="number" id="rho" value="7850" step="10" min="0"></div>
+      </section>
+
+      <section class="card">
+        <h2>表示</h2>
+        <div class="field"><span>部材の色</span>
+          <select id="colorMode">
+            <option value="energy">ひずみエネルギー</option>
+            <option value="axial">軸力</option>
+            <option value="none">単色</option>
+          </select>
+        </div>
+        <label class="check"><input type="checkbox" id="autoScale" checked> 変形倍率を自動</label>
+        <div class="slider"><label for="scale">×</label><input type="range" id="scale" min="0" max="500" step="1" value="50"><span id="scaleVal" style="font-family:var(--font-mono);font-size:12px">×50</span></div>
+        <label class="check"><input type="checkbox" id="showNet" checked> 制御点ネットを表示</label>
+        <label class="check"><input type="checkbox" id="showGhost" checked> 変形前形状を表示</label>
+      </section>
+    </div>
+  </div>
+
+  <div class="strip">
+    <section class="card">
+      <h2>感度 ∂C/∂z（中心差分）</h2>
+      <div class="chart"><canvas id="sens"></canvas></div>
+      <p class="note">負の値の変数を上げるとCが下がります。単位 kN·m/m。</p>
+    </section>
+    <section class="card">
+      <h2>1変数スイープ</h2>
+      <div class="toolbar">
+        <label for="sweepVar">変数</label><select id="sweepVar"></select>
+        <label for="sweepMin">範囲</label><input type="number" id="sweepMin" value="-2" step="0.5">
+        <span>〜</span><input type="number" id="sweepMax" value="8" step="0.5">
+        <span>m</span>
+        <label class="check" style="font-size:12px"><input type="checkbox" id="logY" checked> 対数軸</label>
+        <span class="status" id="sweepStatus"></span>
+      </div>
+      <div class="chart"><canvas id="sweep"></canvas></div>
+      <p class="note">他の変数を現在値に固定したまま、選んだ変数だけを動かしたときのC。縦線が現在値。</p>
+    </section>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script id="fem-src">
+// ===== Lattice shell FEM (3D frame, Euler-Bernoulli) =====
+const FEM = (() => {
+  function bern4(t) {
+    const s = 1 - t;
+    return [s*s*s*s, 4*t*s*s*s, 6*t*t*s*s, 4*t*t*t*s, t*t*t*t];
+  }
+
+  // ctrl: 25 z-values, index = j*5 + i (i along x, j along y)
+  function buildGeometry(n, L, ctrl) {
+    const nn = n + 1;
+    const X = new Float64Array(nn * nn * 3);
+    for (let j = 0; j < nn; j++) {
+      const bv = bern4(j / n);
+      for (let i = 0; i < nn; i++) {
+        const bu = bern4(i / n);
+        let z = 0;
+        for (let b = 0; b < 5; b++) for (let a = 0; a < 5; a++) z += bu[a] * bv[b] * ctrl[b * 5 + a];
+        const id = j * nn + i;
+        X[3*id] = i * L; X[3*id+1] = j * L; X[3*id+2] = z;
+      }
+    }
+    const elems = [];
+    for (let j = 0; j < nn; j++) for (let i = 0; i < n; i++) elems.push([j*nn+i, j*nn+i+1]);
+    for (let i = 0; i < nn; i++) for (let j = 0; j < n; j++) elems.push([j*nn+i, (j+1)*nn+i]);
+    const supports = [0, n, n*nn, n*nn+n];
+    return { nn, nNodes: nn*nn, X, elems, supports };
+  }
+
+  function localK(E, G, A, I, J, L) {
+    const k = new Float64Array(144);
+    const s = (r, c, v) => { k[r*12+c] = v; k[c*12+r] = v; };
+    const a = E*A/L, t = G*J/L;
+    const b3 = 12*E*I/(L*L*L), b2 = 6*E*I/(L*L), b1 = 4*E*I/L, b0 = 2*E*I/L;
+    s(0,0,a); s(0,6,-a); s(6,6,a);
+    s(3,3,t); s(3,9,-t); s(9,9,t);
+    // bending in local x-y plane (v, θz)
+    s(1,1,b3); s(1,5,b2); s(1,7,-b3); s(1,11,b2);
+    s(5,5,b1); s(5,7,-b2); s(5,11,b0);
+    s(7,7,b3); s(7,11,-b2); s(11,11,b1);
+    // bending in local x-z plane (w, θy)
+    s(2,2,b3); s(2,4,-b2); s(2,8,-b3); s(2,10,-b2);
+    s(4,4,b1); s(4,8,b2); s(4,10,b0);
+    s(8,8,b3); s(8,10,b2); s(10,10,b1);
+    return k;
+  }
+
+  function frameOf(x1, x2) {
+    const dx = x2[0]-x1[0], dy = x2[1]-x1[1], dz = x2[2]-x1[2];
+    const L = Math.hypot(dx, dy, dz);
+    const ex = [dx/L, dy/L, dz/L];
+    let ref = [0, 0, 1];
+    if (Math.abs(ex[2]) > 0.999) ref = [0, 1, 0];
+    let ey = [ref[1]*ex[2]-ref[2]*ex[1], ref[2]*ex[0]-ref[0]*ex[2], ref[0]*ex[1]-ref[1]*ex[0]];
+    const m = Math.hypot(ey[0], ey[1], ey[2]); ey = ey.map(v => v/m);
+    const ez = [ex[1]*ey[2]-ex[2]*ey[1], ex[2]*ey[0]-ex[0]*ey[2], ex[0]*ey[1]-ex[1]*ey[0]];
+    return { L, R: [ex, ey, ez] };
+  }
+
+  // Global element stiffness Kg = T^T k T
+  function globalK(k, R) {
+    const Kg = new Float64Array(144);
+    for (let bi = 0; bi < 4; bi++) for (let bj = 0; bj < 4; bj++) {
+      // tmp = k_block * R
+      const tmp = new Float64Array(9);
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+        let s = 0;
+        for (let m = 0; m < 3; m++) s += k[(bi*3+r)*12 + bj*3+m] * R[m][c];
+        tmp[r*3+c] = s;
+      }
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+        let s = 0;
+        for (let m = 0; m < 3; m++) s += R[m][r] * tmp[m*3+c];
+        Kg[(bi*3+r)*12 + bj*3+c] = s;
+      }
+    }
+    return Kg;
+  }
+
+  // p.shape: 'round' | 'square', p.D: outer diameter / width [m], p.t: wall thickness [m], p.solid: bool
+  function section(p) {
+    const D = p.D;
+    const t = p.solid ? D/2 : Math.min(p.t, D/2);
+    const d = Math.max(0, D - 2*t);
+    if (p.shape === 'square') {
+      const A = D*D - d*d;
+      const I = (D**4 - d**4) / 12;
+      // torsion: solid square J = 0.1406 a^4 ; thin-walled square tube (Bredt) J = t (a - t)^3
+      const J = d === 0 ? 0.1406 * D**4 : t * (D - t)**3;
+      return { A, I, J };
+    }
+    const A = Math.PI/4 * (D*D - d*d);
+    const I = Math.PI/64 * (D**4 - d**4);
+    return { A, I, J: 2*I };
+  }
+
+  // p: { n, L, ctrl[25], E(Pa), nu, D(m), t(m), rho, P(N per node), useP, useSW }
+  function analyze(p) {
+    const g = buildGeometry(p.n, p.L, p.ctrl);
+    const { A, I, J } = section(p);
+    const E = p.E, G = E / (2*(1+p.nu));
+    const N = g.nNodes * 6;
+    const bw = 6 * (g.nn + 1) - 1;
+    const W = bw + 1;
+    const K = new Float64Array(N * W);
+    const f = new Float64Array(N);
+    const X = g.X;
+    const els = [];
+    let totalLen = 0;
+    for (const [a, b] of g.elems) {
+      const x1 = [X[3*a], X[3*a+1], X[3*a+2]], x2 = [X[3*b], X[3*b+1], X[3*b+2]];
+      const { L, R } = frameOf(x1, x2);
+      totalLen += L;
+      const Kg = globalK(localK(E, G, A, I, J, L), R);
+      const dofs = [];
+      for (let q = 0; q < 6; q++) dofs.push(6*a+q);
+      for (let q = 0; q < 6; q++) dofs.push(6*b+q);
+      for (let r = 0; r < 12; r++) for (let c = 0; c < 12; c++) {
+        const gi = dofs[r], gj = dofs[c];
+        if (gj < gi) continue;
+        K[gi*W + (gj-gi)] += Kg[r*12+c];
+      }
+      if (p.useSW) {
+        const w = p.rho * 9.80665 * A * L / 2;
+        f[6*a+2] -= w; f[6*b+2] -= w;
+      }
+      els.push({ a, b, L, R, Kg, dofs });
+    }
+    if (p.useP) for (let id = 0; id < g.nNodes; id++) f[6*id+2] -= p.P;
+
+    // Boundary conditions: fixed corners
+    const fixed = new Uint8Array(N);
+    for (const s of g.supports) for (let q = 0; q < 6; q++) fixed[6*s+q] = 1;
+    for (let i = 0; i < N; i++) if (fixed[i]) {
+      for (let k = 0; k < W; k++) K[i*W+k] = 0;
+      for (let k = 1; k <= bw && i-k >= 0; k++) K[(i-k)*W + k] = 0;
+      K[i*W] = 1; f[i] = 0;
+    }
+
+    // Banded Cholesky (A = U^T U), in place
+    for (let i = 0; i < N; i++) {
+      const k0 = Math.max(0, i - bw);
+      let s = K[i*W];
+      for (let k = k0; k < i; k++) { const u = K[k*W + (i-k)]; s -= u*u; }
+      if (!(s > 0)) throw new Error('剛性行列が正定値ではありません（不安定構造の可能性）');
+      const d = Math.sqrt(s); K[i*W] = d;
+      const jmax = Math.min(N-1, i + bw);
+      for (let j = i+1; j <= jmax; j++) {
+        let t = K[i*W + (j-i)];
+        const kk0 = Math.max(0, j - bw);
+        for (let k = kk0; k < i; k++) t -= K[k*W + (i-k)] * K[k*W + (j-k)];
+        K[i*W + (j-i)] = t / d;
+      }
+    }
+    const u = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+      let s = f[i];
+      for (let k = Math.max(0, i-bw); k < i; k++) s -= K[k*W + (i-k)] * u[k];
+      u[i] = s / K[i*W];
+    }
+    for (let i = N-1; i >= 0; i--) {
+      let s = u[i];
+      const jmax = Math.min(N-1, i + bw);
+      for (let j = i+1; j <= jmax; j++) s -= K[i*W + (j-i)] * u[j];
+      u[i] = s / K[i*W];
+    }
+
+    let C = 0;
+    for (let i = 0; i < N; i++) C += f[i] * u[i];
+    C *= 0.5; // C = 1/2 f^T u
+
+    let maxDisp = 0, maxDispNode = 0;
+    for (let id = 0; id < g.nNodes; id++) {
+      const d = Math.hypot(u[6*id], u[6*id+1], u[6*id+2]);
+      if (d > maxDisp) { maxDisp = d; maxDispNode = id; }
+    }
+    const axial = new Float64Array(els.length), energy = new Float64Array(els.length);
+    els.forEach((e, k) => {
+      const ue = e.dofs.map(d => u[d]);
+      let s = 0;
+      for (let r = 0; r < 12; r++) { let t = 0; for (let c = 0; c < 12; c++) t += e.Kg[r*12+c] * ue[c]; s += ue[r] * t; }
+      energy[k] = 0.5 * s;
+      const ex = e.R[0];
+      const du = (ue[6]-ue[0])*ex[0] + (ue[7]-ue[1])*ex[1] + (ue[8]-ue[2])*ex[2];
+      axial[k] = E * A / e.L * du;
+    });
+    const totalLoad = -f.reduce((s, v, i) => s + (i % 6 === 2 ? v : 0), 0);
+    return { geom: g, u, C, maxDisp, maxDispNode, axial, energy, totalLen, volume: totalLen * A, A, I, totalLoad };
+  }
+
+  // Symmetric (D4) 5-variable mapping for the 5x5 control net. Corners fixed at z=0.
+  const fold = k => Math.min(k, 4 - k);
+  function orbitOf(i, j) {
+    const a = Math.min(fold(i), fold(j)), b = Math.max(fold(i), fold(j));
+    const key = a + ',' + b;
+    return { '0,0': -1, '0,1': 0, '0,2': 1, '1,1': 2, '1,2': 3, '2,2': 4 }[key];
+  }
+  function expandSym(z5) {
+    const c = new Array(25);
+    for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) {
+      const o = orbitOf(i, j); c[j*5+i] = o < 0 ? 0 : z5[o];
+    }
+    return c;
+  }
+  return { analyze, expandSym, orbitOf, buildGeometry, section };
+})();
+
+
+</script>
+<script>
+(() => {
+const N_CELL = 10, CELL = 1.0, SPAN = N_CELL * CELL;
+const ORBIT_INFO = [
+  { name: 'z0', desc: '辺・隅寄り（8点）' },
+  { name: 'z1', desc: '辺・中央（4点）' },
+  { name: 'z2', desc: '内側・対角（4点）' },
+  { name: 'z3', desc: '内側・辺寄り（8点）' },
+  { name: 'z4', desc: '中央（1点）' },
+];
+const ZMIN = -3, ZMAX = 8;
+let secShape = 'square';
+const state = {
+  mode: 'sym',
+  z5: [1.6, 2.4, 3.2, 3.9, 4.4],
+  ctrl: null,
+  sel: null, // control index 0..24
+  result: null,
+};
+state.ctrl = FEM.expandSym(state.z5);
+
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+// ---------- parameters ----------
+function params(ctrl) {
+  const num = (id, d) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : d; };
+  return {
+    n: N_CELL, L: CELL, ctrl: ctrl || currentCtrl(),
+    E: num('E', 205000) * 1e6, nu: num('nu', 0.3),
+    shape: secShape, solid: $('solid').checked,
+    D: num('D', 100) / 1000, t: num('t', 6) / 1000,
+    rho: num('rho', 7850), P: num('P', 1) * 1000,
+    useP: $('useP').checked, useSW: $('useSW').checked,
+  };
+}
+function currentCtrl() { return state.mode === 'sym' ? FEM.expandSym(state.z5) : state.ctrl.slice(); }
+function varCount() { return state.mode === 'sym' ? 5 : 25; }
+function getVar(k) { return state.mode === 'sym' ? state.z5[k] : state.ctrl[k]; }
+function ctrlWithVar(k, val) {
+  if (state.mode === 'sym') { const z = state.z5.slice(); z[k] = val; return FEM.expandSym(z); }
+  const c = state.ctrl.slice(); c[k] = val; return c;
+}
+function varLabel(k) { return state.mode === 'sym' ? ORBIT_INFO[k].name : `P(${k % 5},${Math.floor(k / 5)})`; }
+function setVar(k, val) {
+  val = Math.max(ZMIN, Math.min(ZMAX, val));
+  if (state.mode === 'sym') state.z5[k] = val; else state.ctrl[k] = val;
+}
+function ctrlToVar(ci) {
+  if (state.mode === 'free') return ci;
+  return FEM.orbitOf(ci % 5, Math.floor(ci / 5)); // -1 for fixed corner
+}
+
+// ---------- UI: sliders & net ----------
+function buildSliders() {
+  const box = $('symSliders'); box.innerHTML = '';
+  box.hidden = state.mode !== 'sym';
+  if (state.mode !== 'sym') return;
+  ORBIT_INFO.forEach((o, k) => {
+    const d = document.createElement('div'); d.className = 'slider'; d.id = 'sl' + k;
+    d.innerHTML = `<label for="z${k}">${o.name}</label>
+      <input type="range" id="z${k}" min="${ZMIN}" max="${ZMAX}" step="0.05" value="${state.z5[k]}">
+      <input type="number" id="zn${k}" step="0.1" value="${state.z5[k].toFixed(2)}">
+      <span class="meta">${o.desc}　m</span>`;
+    box.appendChild(d);
+    d.querySelector('input[type=range]').addEventListener('input', e => { setVar(k, +e.target.value); onShapeChange(); });
+    d.querySelector('input[type=number]').addEventListener('change', e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) { setVar(k, v); onShapeChange(); } });
+  });
+}
+function buildNet() {
+  const net = $('net'); net.innerHTML = '';
+  net.appendChild(Object.assign(document.createElement('span'), { className: 'ax', textContent: 'j\\i' }));
+  for (let i = 0; i < 5; i++) net.appendChild(Object.assign(document.createElement('span'), { className: 'ax', textContent: i }));
+  for (let j = 4; j >= 0; j--) {
+    net.appendChild(Object.assign(document.createElement('span'), { className: 'ax', textContent: j }));
+    for (let i = 0; i < 5; i++) {
+      const ci = j * 5 + i;
+      const c = document.createElement('div'); c.className = 'cell'; c.dataset.ci = ci; c.tabIndex = 0;
+      if (state.mode === 'sym') {
+        const o = FEM.orbitOf(i, j);
+        if (o < 0) { c.classList.add('fixed'); c.innerHTML = `<b>支点</b>0.00`; }
+        else c.innerHTML = `<b>${ORBIT_INFO[o].name}</b><span class="val">${state.z5[o].toFixed(2)}</span>`;
+      } else {
+        c.innerHTML = `<input type="number" step="0.1" id="c${ci}" aria-label="P(${i},${j})のz" value="${state.ctrl[ci].toFixed(2)}">`;
+        c.querySelector('input').addEventListener('change', e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) { setVar(ci, v); onShapeChange(); } });
+        c.querySelector('input').addEventListener('focus', () => select(ci));
+      }
+      c.addEventListener('click', () => select(ci));
+      net.appendChild(c);
+    }
+  }
+}
+function syncInputs() {
+  if (state.mode === 'sym') {
+    for (let k = 0; k < 5; k++) {
+      const r = $('z' + k), n = $('zn' + k);
+      if (r && document.activeElement !== r) r.value = state.z5[k];
+      if (n && document.activeElement !== n) n.value = state.z5[k].toFixed(2);
+    }
+    document.querySelectorAll('#net .cell').forEach(c => {
+      const ci = +c.dataset.ci, o = FEM.orbitOf(ci % 5, Math.floor(ci / 5));
+      const v = c.querySelector('.val'); if (v && o >= 0) v.textContent = state.z5[o].toFixed(2);
+    });
+  } else {
+    for (let ci = 0; ci < 25; ci++) { const el = $('c' + ci); if (el && document.activeElement !== el) el.value = state.ctrl[ci].toFixed(2); }
+  }
+}
+function markSelection() {
+  const v = state.sel == null ? null : ctrlToVar(state.sel);
+  document.querySelectorAll('#net .cell').forEach(c => {
+    const ci = +c.dataset.ci;
+    const on = state.mode === 'sym' ? (v != null && v >= 0 && ctrlToVar(ci) === v) : ci === state.sel;
+    c.classList.toggle('sel', on);
+  });
+  for (let k = 0; k < 5; k++) { const s = $('sl' + k); if (s) s.classList.toggle('sel', v === k && state.mode === 'sym'); }
+  updateCtrlColors();
+}
+function select(ci) {
+  state.sel = ci; markSelection();
+  const v = ctrlToVar(ci);
+  if (v >= 0 && $('sweepVar').value != v) { $('sweepVar').value = v; scheduleHeavy(0); }
+}
+function setMode(m) {
+  if (m === state.mode) return;
+  if (m === 'free') state.ctrl = FEM.expandSym(state.z5);
+  else {
+    const sum = [0,0,0,0,0], cnt = [0,0,0,0,0];
+    for (let ci = 0; ci < 25; ci++) { const o = FEM.orbitOf(ci % 5, Math.floor(ci / 5)); if (o >= 0) { sum[o] += state.ctrl[ci]; cnt[o]++; } }
+    state.z5 = sum.map((s, k) => s / cnt[k]);
+  }
+  state.mode = m;
+  $('modeSym').setAttribute('aria-pressed', m === 'sym'); $('modeFree').setAttribute('aria-pressed', m === 'free');
+  $('modeNote').textContent = m === 'sym'
+    ? '二軸＋対角の対称（D4）で25点を5変数に縮約。四隅は支点として z = 0 に固定。'
+    : '25点の z を個別に設定。四隅の制御点は支点の高さになります。値を外すと対称性は崩れます。';
+  const pv = $('sweepVar').value; $('sweepVar').value = ''; buildSweepVars(); if (m === 'sym') $('sweepVar').value = 4;
+  buildSliders(); buildNet(); markSelection(); onShapeChange();
+}
+function buildSweepVars() {
+  const s = $('sweepVar'); const prev = s.value; s.innerHTML = '';
+  for (let k = 0; k < varCount(); k++) s.appendChild(new Option(varLabel(k), k));
+  s.value = state.mode === 'sym' ? (prev && +prev < 5 ? prev : 4) : 12;
+}
+function preset(kind) {
+  const f = {
+    dome: (x, y) => 4.6 * (1 - 0.5 * (x * x + y * y)),
+    flat: () => 0,
+    vault: (x, y) => 4.5 * (1 - x * x),
+    saddle: (x, y) => 2.5 + 2.2 * (x * x - y * y),
+  }[kind];
+  const c = new Array(25);
+  for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) {
+    const x = (i - 2) / 2, y = (j - 2) / 2;
+    c[j * 5 + i] = (i % 4 === 0 && j % 4 === 0) ? 0 : +f(x, y).toFixed(2);
+  }
+  if (kind === 'vault' || kind === 'saddle') {
+    if (state.mode === 'sym') setMode('free');
+    state.ctrl = c;
+  } else if (state.mode === 'sym') {
+    const z = [0,0,0,0,0]; for (let ci = 0; ci < 25; ci++) { const o = FEM.orbitOf(ci % 5, Math.floor(ci / 5)); if (o >= 0) z[o] = c[ci]; }
+    state.z5 = z;
+  } else state.ctrl = c;
+  onShapeChange();
+}
+
+// ---------- three.js scene ----------
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+view.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 400);
+camera.up.set(0, 0, 1);
+camera.position.set(-9, -13, 13);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(SPAN / 2, SPAN / 2, 1.6);
+controls.enableDamping = true; controls.dampingFactor = 0.12;
+controls.update();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 0.85));
+const dl = new THREE.DirectionalLight(0xffffff, 0.55); dl.position.set(-10, -20, 30); scene.add(dl);
+
+const grid = new THREE.GridHelper(SPAN + 4, (SPAN + 4), 0x888888, 0x888888);
+grid.rotation.x = Math.PI / 2; grid.position.set(SPAN / 2, SPAN / 2, -0.001);
+grid.material.transparent = true; grid.material.opacity = 0.18; scene.add(grid);
+
+const nElem = 2 * N_CELL * (N_CELL + 1);
+const memberGeo = new THREE.CylinderGeometry(1, 1, 1, 8, 1, false);
+const squareGeo = new THREE.BoxGeometry(2, 1, 2);
+const memberMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const members = new THREE.InstancedMesh(memberGeo, memberMat, nElem);
+members.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(members);
+const tmpColor = new THREE.Color();
+for (let k = 0; k < nElem; k++) members.setColorAt(k, tmpColor.set(0x888888));
+
+const ghostGeo = new THREE.BufferGeometry();
+ghostGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nElem * 6), 3));
+const ghostMat = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.45 });
+const ghost = new THREE.LineSegments(ghostGeo, ghostMat); scene.add(ghost);
+
+const supMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+const supports = [];
+for (let s = 0; s < 4; s++) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.2), supMat); scene.add(m); supports.push(m); }
+
+const ctrlGeo = new THREE.SphereGeometry(0.17, 16, 12);
+const ctrlMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const ctrlMesh = new THREE.InstancedMesh(ctrlGeo, ctrlMat, 25);
+scene.add(ctrlMesh);
+for (let k = 0; k < 25; k++) ctrlMesh.setColorAt(k, tmpColor.set(0xe08a1e));
+const netGeo = new THREE.BufferGeometry();
+netGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(40 * 6), 3));
+const netMat = new THREE.LineDashedMaterial({ color: 0xe08a1e, dashSize: 0.25, gapSize: 0.18, transparent: true, opacity: 0.7 });
+const netLines = new THREE.LineSegments(netGeo, netMat); scene.add(netLines);
+const stemGeo = new THREE.BufferGeometry();
+stemGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(25 * 6), 3));
+const stemMat = new THREE.LineBasicMaterial({ color: 0xe08a1e, transparent: true, opacity: 0.25 });
+const stems = new THREE.LineSegments(stemGeo, stemMat); scene.add(stems);
+
+function applyTheme() {
+  scene.background = new THREE.Color(css('--view-bg'));
+  const line = new THREE.Color(css('--muted'));
+  grid.material.color = line;
+  ghostMat.color.set(css('--muted'));
+  netMat.color.set(css('--ctrl')); stemMat.color.set(css('--ctrl'));
+  supMat.color.set(css('--ink'));
+  updateCtrlColors();
+  if (state.result) drawMembers();
+  drawSens(); drawSweep();
+}
+function updateCtrlColors() {
+  const base = new THREE.Color(css('--ctrl')), selc = new THREE.Color(css('--accent')), fixedc = new THREE.Color(css('--muted'));
+  const v = state.sel == null ? null : ctrlToVar(state.sel);
+  for (let ci = 0; ci < 25; ci++) {
+    const vi = ctrlToVar(ci);
+    let c = base;
+    if (vi < 0) c = fixedc;
+    else if (v != null && v >= 0 && vi === v) c = selc;
+    ctrlMesh.setColorAt(ci, c);
+  }
+  ctrlMesh.instanceColor.needsUpdate = true;
+}
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (!resize.done) { const f = Math.max(1, 1.25 / camera.aspect); camera.position.set(SPAN / 2 + (-9 - SPAN / 2) * f, SPAN / 2 + (-13 - SPAN / 2) * f, 1.6 + (13 - 1.6) * f); controls.update(); resize.done = w > 0; }
+}
+new ResizeObserver(resize).observe(view);
+
+// ---------- colour scales ----------
+function lerpColor(a, b, t) { return a.clone().lerp(b, Math.max(0, Math.min(1, t))); }
+function seqColor(t) {
+  const c0 = new THREE.Color(css('--neutral-member')), c1 = new THREE.Color(css('--ctrl')), c2 = new THREE.Color(css('--tension'));
+  return t < 0.5 ? lerpColor(c0, c1, t * 2) : lerpColor(c1, c2, (t - 0.5) * 2);
+}
+function divColor(t) { // t in [-1,1], negative = compression
+  const mid = new THREE.Color(css('--neutral-member'));
+  return t < 0 ? lerpColor(mid, new THREE.Color(css('--compress')), -t) : lerpColor(mid, new THREE.Color(css('--tension')), t);
+}
+
+// ---------- drawing ----------
+const up = new THREE.Vector3(0, 1, 0), vA = new THREE.Vector3(), vB = new THREE.Vector3(), dir = new THREE.Vector3(), mid = new THREE.Vector3();
+const q = new THREE.Quaternion(), sc = new THREE.Vector3(), mtx = new THREE.Matrix4();
+function displayScale(r) {
+  if ($('autoScale').checked) {
+    const s = r.maxDisp > 0 ? Math.max(1, Math.round(0.6 / r.maxDisp)) : 1;
+    $('scale').value = Math.min(500, s); $('scaleVal').textContent = '×' + s; return s;
+  }
+  const s = +$('scale').value; $('scaleVal').textContent = '×' + s; return s;
+}
+function drawMembers() {
+  const r = state.result, g = r.geom, X = g.X, u = r.u, s = displayScale(r);
+  const rad = Math.max(0.035, Math.min(0.12, parseFloat($('D').value) / 1000 / 2 * 0.8));
+  const mode = $('colorMode').value;
+  let maxE = 0, maxN = 0;
+  for (let k = 0; k < r.energy.length; k++) { maxE = Math.max(maxE, r.energy[k] / g.elems.length); maxN = Math.max(maxN, Math.abs(r.axial[k])); }
+  const meanE = r.energy.reduce((a, b) => a + b, 0) / r.energy.length;
+  const eTop = Math.max(...r.energy) || 1;
+  const gp = ghostGeo.attributes.position.array;
+  g.elems.forEach(([a, b], k) => {
+    vA.set(X[3*a] + s*u[6*a], X[3*a+1] + s*u[6*a+1], X[3*a+2] + s*u[6*a+2]);
+    vB.set(X[3*b] + s*u[6*b], X[3*b+1] + s*u[6*b+1], X[3*b+2] + s*u[6*b+2]);
+    dir.subVectors(vB, vA); const len = dir.length(); dir.normalize();
+    q.setFromUnitVectors(up, dir); mid.addVectors(vA, vB).multiplyScalar(0.5); sc.set(rad, len, rad);
+    mtx.compose(mid, q, sc); members.setMatrixAt(k, mtx);
+    let col;
+    if (mode === 'energy') col = seqColor(Math.sqrt(r.energy[k] / eTop));
+    else if (mode === 'axial') col = divColor(maxN > 0 ? r.axial[k] / maxN : 0);
+    else col = new THREE.Color(css('--neutral-member'));
+    members.setColorAt(k, col);
+    gp.set([X[3*a], X[3*a+1], X[3*a+2], X[3*b], X[3*b+1], X[3*b+2]], k * 6);
+  });
+  members.instanceMatrix.needsUpdate = true; members.instanceColor.needsUpdate = true;
+  ghostGeo.attributes.position.needsUpdate = true; ghostGeo.computeBoundingSphere();
+  ghost.visible = $('showGhost').checked;
+  g.supports.forEach((id, k) => supports[k].position.set(X[3*id], X[3*id+1], X[3*id+2] - 0.12));
+  drawLegend(mode, eTop, maxN);
+}
+function drawLegend(mode, eTop, maxN) {
+  const L = $('legend');
+  if (mode === 'none') { L.hidden = true; return; }
+  L.hidden = false;
+  if (mode === 'energy') {
+    L.innerHTML = `部材ひずみエネルギー<div class="bar" style="background:linear-gradient(90deg,${css('--neutral-member')},${css('--ctrl')},${css('--tension')})"></div>
+      <div class="ends"><span>0</span><span>${fmt(eTop / 1000, 3)} kN·m</span></div>`;
+  } else {
+    L.innerHTML = `軸力（引張 + ／ 圧縮 −）<div class="bar" style="background:linear-gradient(90deg,${css('--compress')},${css('--neutral-member')},${css('--tension')})"></div>
+      <div class="ends"><span>−${fmt(maxN / 1000, 3)}</span><span>0</span><span>+${fmt(maxN / 1000, 3)} kN</span></div>`;
+  }
+}
+function drawCtrl() {
+  const c = currentCtrl();
+  const pos = i => (i / 4) * SPAN;
+  for (let ci = 0; ci < 25; ci++) {
+    mtx.makeTranslation(pos(ci % 5), pos(Math.floor(ci / 5)), c[ci]);
+    ctrlMesh.setMatrixAt(ci, mtx);
+  }
+  ctrlMesh.instanceMatrix.needsUpdate = true; ctrlMesh.computeBoundingSphere?.();
+  const np = netGeo.attributes.position.array; let p = 0;
+  for (let j = 0; j < 5; j++) for (let i = 0; i < 4; i++) { np.set([pos(i), pos(j), c[j*5+i], pos(i+1), pos(j), c[j*5+i+1]], p); p += 6; }
+  for (let i = 0; i < 5; i++) for (let j = 0; j < 4; j++) { np.set([pos(i), pos(j), c[j*5+i], pos(i), pos(j+1), c[(j+1)*5+i]], p); p += 6; }
+  netGeo.attributes.position.needsUpdate = true; netLines.computeLineDistances();
+  const sp = stemGeo.attributes.position.array;
+  for (let ci = 0; ci < 25; ci++) sp.set([pos(ci % 5), pos(Math.floor(ci / 5)), 0, pos(ci % 5), pos(Math.floor(ci / 5)), c[ci]], ci * 6);
+  stemGeo.attributes.position.needsUpdate = true;
+  const show = $('showNet').checked; ctrlMesh.visible = netLines.visible = stems.visible = show;
+}
+
+// ---------- formatting ----------
+function fmt(v, sig = 4) {
+  if (!Number.isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1e5 || a < 1e-3) return v.toExponential(2);
+  return v.toPrecision(sig);
+}
+
+// ---------- analysis loop ----------
+let pending = false;
+function onShapeChange() {
+  syncInputs();
+  if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; runMain(); }); }
+  scheduleHeavy();
+}
+function runMain() {
+  drawCtrl();
+  try {
+    const r = FEM.analyze(params());
+    state.result = r; $('err').hidden = true;
+    $('roC').innerHTML = `${fmt(r.C / 1000)}<small>kN·m</small>`;
+    $('roD').innerHTML = `${fmt(r.maxDisp * 1000, 3)}<small>mm</small>`;
+    $('roV').innerHTML = `${fmt(r.volume, 3)}<small>m³</small>`;
+    $('roP').innerHTML = `${fmt(r.totalLoad / 1000, 4)}<small>kN</small>`;
+    let h = 0; for (let i = 2; i < r.geom.X.length; i += 3) h = Math.max(h, r.geom.X[i]);
+    $('roH').innerHTML = `${fmt(h, 3)}<small>m</small>`;
+    drawMembers();
+  } catch (e) {
+    $('err').textContent = e.message; $('err').hidden = false;
+  }
+}
+
+let heavyTimer = null, sensData = null, sweepData = null;
+function scheduleHeavy(delay = 120) {
+  clearTimeout(heavyTimer);
+  heavyTimer = setTimeout(runHeavy, delay);
+}
+const workerSrc = document.getElementById('fem-src').textContent + `
+self.onmessage = (e) => {
+  const { id, p, mode, z5, ctrl, k, lo, hi, npts } = e.data;
+  const withVar = (j, val) => {
+    if (mode === 'sym') { const z = z5.slice(); z[j] = val; return FEM.expandSym(z); }
+    const c = ctrl.slice(); c[j] = val; return c;
+  };
+  const base = j => mode === 'sym' ? z5[j] : ctrl[j];
+  const nv = mode === 'sym' ? 5 : 25, h = 1e-3, sens = [];
+  try {
+    for (let j = 0; j < nv; j++) {
+      const cp = FEM.analyze({ ...p, ctrl: withVar(j, base(j) + h) }).C;
+      const cm = FEM.analyze({ ...p, ctrl: withVar(j, base(j) - h) }).C;
+      sens.push((cp - cm) / (2 * h) / 1000);
+    }
+  } catch (err) { self.postMessage({ id, error: err.message }); return; }
+  const xs = [], ys = [];
+  for (let s = 0; s < npts; s++) {
+    const v = lo + (hi - lo) * s / (npts - 1);
+    let C = NaN;
+    try { C = FEM.analyze({ ...p, ctrl: withVar(k, v) }).C / 1000; } catch (err) {}
+    xs.push(v); ys.push(C);
+  }
+  self.postMessage({ id, sens, xs, ys, k, n: nv * 2 + npts });
+};`;
+let worker = null, jobId = 0, jobT0 = 0;
+try {
+  worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' })));
+  worker.onmessage = e => {
+    const d = e.data; if (d.id !== jobId) return;
+    if (d.error) { $('sweepStatus').textContent = d.error; return; }
+    sensData = d.sens; sweepData = { k: d.k, xs: d.xs, ys: d.ys };
+    $('sweepStatus').textContent = `${(performance.now() - jobT0).toFixed(0)} ms（${d.n}回解析）`;
+    drawSens(); drawSweep();
+  };
+} catch (e) { worker = null; }
+function sweepRange() {
+  let lo = parseFloat($('sweepMin').value), hi = parseFloat($('sweepMax').value);
+  if (!(hi > lo)) { lo = -2; hi = 8; }
+  return { lo, hi };
+}
+function runHeavy() {
+  const { lo, hi } = sweepRange();
+  const job = { id: ++jobId, p: params(), mode: state.mode, z5: state.z5.slice(), ctrl: state.ctrl.slice(), k: +$('sweepVar').value, lo, hi, npts: 61 };
+  jobT0 = performance.now();
+  $('sweepStatus').textContent = '計算中…';
+  if (worker) { worker.postMessage(job); return; }
+  // fallback: main thread
+  const nv = varCount(), h = 1e-3, g = [];
+  try {
+    for (let k = 0; k < nv; k++) {
+      const v = getVar(k);
+      g.push((FEM.analyze({ ...job.p, ctrl: ctrlWithVar(k, v + h) }).C - FEM.analyze({ ...job.p, ctrl: ctrlWithVar(k, v - h) }).C) / (2 * h) / 1000);
+    }
+    const xs = [], ys = [];
+    for (let s = 0; s < job.npts; s++) { const v = lo + (hi - lo) * s / (job.npts - 1); let C = NaN; try { C = FEM.analyze({ ...job.p, ctrl: ctrlWithVar(job.k, v) }).C / 1000; } catch (e) {} xs.push(v); ys.push(C); }
+    sensData = g; sweepData = { k: job.k, xs, ys };
+    $('sweepStatus').textContent = `${(performance.now() - jobT0).toFixed(0)} ms`;
+  } catch (e) { $('sweepStatus').textContent = e.message; }
+  drawSens(); drawSweep();
+}
+
+// ---------- 2D charts ----------
+function setupCanvas(cv) {
+  const r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.max(1, r.width * dpr); cv.height = Math.max(1, r.height * dpr);
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: r.width, h: r.height };
+}
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo || 1, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n) || mag * 10;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+function drawSens() {
+  const cv = $('sens'); if (!sensData) return;
+  const { ctx, w, h } = setupCanvas(cv);
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = '11px ' + css('--font-mono'); ctx.textBaseline = 'middle';
+  const ink = css('--ink'), muted = css('--muted'), line = css('--line');
+  const neg = css('--accent'), pos = css('--tension');
+  const g = sensData, maxA = Math.max(...g.map(Math.abs)) || 1;
+  if (state.mode === 'sym') {
+    const left = 34, right = 70, top = 8, rowH = (h - top - 8) / g.length, x0 = left + (w - left - right) / 2, half = (w - left - right) / 2;
+    ctx.strokeStyle = line; ctx.beginPath(); ctx.moveTo(x0, top); ctx.lineTo(x0, h - 8); ctx.stroke();
+    g.forEach((v, k) => {
+      const y = top + rowH * (k + 0.5), bw = (v / maxA) * half;
+      ctx.fillStyle = v < 0 ? neg : pos;
+      ctx.fillRect(Math.min(x0, x0 + bw), y - rowH * 0.28, Math.abs(bw), rowH * 0.56);
+      ctx.fillStyle = ink; ctx.textAlign = 'left'; ctx.fillText(ORBIT_INFO[k].name, 4, y);
+      ctx.fillStyle = muted; ctx.textAlign = 'right'; ctx.fillText(fmt(v, 3), w - 4, y);
+    });
+  } else {
+    ctx.font = '10px ' + css('--font-mono');
+    const cell = Math.min((w - 30) / 5, (h - 10) / 5), ox = (w - cell * 5) / 2, oy = 4;
+    for (let j = 4; j >= 0; j--) for (let i = 0; i < 5; i++) {
+      const v = g[j * 5 + i], t = Math.abs(v) / maxA;
+      const x = ox + i * cell, y = oy + (4 - j) * cell;
+      ctx.globalAlpha = 0.15 + 0.85 * Math.sqrt(t); ctx.fillStyle = v < 0 ? neg : pos;
+      ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2); ctx.globalAlpha = 1;
+      ctx.fillStyle = t > 0.45 ? css('--panel') : ink; ctx.textAlign = 'center';
+      ctx.fillText(v.toFixed(3), x + cell / 2, y + cell / 2);
+    }
+  }
+}
+function drawSweep() {
+  const cv = $('sweep'); if (!sweepData) return;
+  const { ctx, w, h } = setupCanvas(cv);
+  ctx.clearRect(0, 0, w, h);
+  const ink = css('--ink'), muted = css('--muted'), line = css('--line'), acc = css('--accent'), ctrl = css('--ctrl');
+  const log = $('logY').checked;
+  const { xs, ys } = sweepData;
+  ctx.font = '11px ' + css('--font-mono');
+  const valid = ys.filter(v => Number.isFinite(v) && (!log || v > 0));
+  if (!valid.length) return;
+  const tf = v => log ? Math.log10(v) : v;
+  let ymin = Math.min(...valid.map(tf)), ymax = Math.max(...valid.map(tf));
+  if (ymax - ymin < 1e-9) { ymax += 0.5; ymin -= 0.5; }
+  const padL = 62, padR = 12, padT = 10, padB = 26;
+  const X = v => padL + (v - xs[0]) / (xs[xs.length - 1] - xs[0]) * (w - padL - padR);
+  const Y = v => padT + (1 - (tf(v) - ymin) / (ymax - ymin)) * (h - padT - padB);
+  ctx.font = '11px ' + css('--font-mono'); ctx.lineWidth = 1;
+  // y grid
+  let yt;
+  if (log) { yt = []; for (let e = Math.floor(ymin); e <= Math.ceil(ymax); e++) for (const m of [1, 2, 5]) { const v = m * Math.pow(10, e); if (Math.log10(v) >= ymin - 1e-9 && Math.log10(v) <= ymax + 1e-9) yt.push(v); } }
+  else yt = niceTicks(ymin, ymax, 4);
+  if (log && yt.length < 3) yt = niceTicks(Math.pow(10, ymin), Math.pow(10, ymax), 4).filter(v => v > 0);
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  yt.forEach(v => { const y = Y(v); ctx.strokeStyle = line; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.fillStyle = muted; ctx.fillText(fmt(v, 3), padL - 6, y); });
+  ctx.save(); ctx.translate(11, padT + (h - padT - padB) / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('C [kN·m]', 0, 0); ctx.restore();
+  // x ticks
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  niceTicks(xs[0], xs[xs.length - 1], 6).forEach(v => { const x = X(v); ctx.fillStyle = muted; ctx.fillText(v, x, h - padB + 6); ctx.strokeStyle = line; ctx.beginPath(); ctx.moveTo(x, h - padB); ctx.lineTo(x, h - padB + 3); ctx.stroke(); });
+  // area + line
+  ctx.beginPath(); let started = false;
+  xs.forEach((x, i) => { const v = ys[i]; if (!Number.isFinite(v) || (log && v <= 0)) { started = false; return; } const px = X(x), py = Y(v); started ? ctx.lineTo(px, py) : ctx.moveTo(px, py); started = true; });
+  ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.stroke();
+  // minimum marker
+  let mi = -1; ys.forEach((v, i) => { if (Number.isFinite(v) && (mi < 0 || v < ys[mi])) mi = i; });
+  if (mi >= 0) { ctx.fillStyle = acc; ctx.beginPath(); ctx.arc(X(xs[mi]), Y(ys[mi]), 3.5, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = ink; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; const lbl = `最小 ${fmt(ys[mi], 3)} kN·m @ ${xs[mi].toFixed(2)} m`; const tw = ctx.measureText(lbl).width; const px = X(xs[mi]), py = Y(ys[mi]); const lx = px + 8 + tw > w - padR ? px - 8 - tw : px + 8; const ly = py - 6 < padT + 12 ? py + 16 : py - 6; ctx.fillText(lbl, lx, ly); }
+  // current
+  const cur = getVar(sweepData.k);
+  if (cur >= xs[0] && cur <= xs[xs.length - 1]) {
+    const x = X(cur); ctx.strokeStyle = ctrl; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+
+// ---------- drag control points ----------
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let drag = null;
+function pick(ev) {
+  if (!$('showNet').checked) return null;
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObject(ctrlMesh);
+  return hit.length ? hit[0].instanceId : null;
+}
+renderer.domElement.addEventListener('pointerdown', ev => {
+  if (ev.button !== 0) return;
+  const ci = pick(ev); if (ci == null) return;
+  select(ci);
+  const v = ctrlToVar(ci); if (v < 0) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  controls.enabled = false;
+  renderer.domElement.setPointerCapture(ev.pointerId);
+  const c = currentCtrl();
+  const p = new THREE.Vector3((ci % 5) / 4 * SPAN, Math.floor(ci / 5) / 4 * SPAN, c[ci]);
+  const dist = camera.position.distanceTo(p);
+  const mPerPx = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / renderer.domElement.clientHeight;
+  drag = { v, y0: ev.clientY, z0: getVar(v), mPerPx };
+}, { capture: true });
+renderer.domElement.addEventListener('pointermove', ev => {
+  if (drag) {
+    setVar(drag.v, Math.round((drag.z0 - (ev.clientY - drag.y0) * drag.mPerPx) * 100) / 100);
+    onShapeChange(); return;
+  }
+  renderer.domElement.style.cursor = pick(ev) != null ? 'ns-resize' : '';
+});
+const endDrag = () => { if (drag) { drag = null; controls.enabled = true; } };
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+
+// ---------- wiring ----------
+$('modeSym').onclick = () => setMode('sym');
+$('modeFree').onclick = () => setMode('free');
+$('pDome').onclick = () => preset('dome');
+$('pFlat').onclick = () => preset('flat');
+$('pVault').onclick = () => preset('vault');
+$('pSaddle').onclick = () => preset('saddle');
+['useP', 'P', 'useSW', 'D', 't', 'E', 'nu', 'rho'].forEach(id => $(id).addEventListener('input', () => { updateSecInfo(); onShapeChange(); }));
+function setSection(shape) {
+  secShape = shape;
+  $('shSquare').setAttribute('aria-pressed', shape === 'square'); $('shRound').setAttribute('aria-pressed', shape === 'round');
+  $('dLabel').innerHTML = shape === 'square' ? '幅 B <small>mm</small>' : '外径 D <small>mm</small>';
+  members.geometry = shape === 'square' ? squareGeo : memberGeo;
+  updateSecInfo(); onShapeChange();
+}
+function updateSecInfo() {
+  $('t').disabled = $('solid').checked;
+  const p = params(), s = FEM.section(p);
+  const name = (p.shape === 'square' ? '角形' : '丸形') + (p.solid ? '鋼（中実）' : '鋼管');
+  $('secInfo').textContent = `${name}　A = ${(s.A * 1e4).toFixed(2)} cm²　I = ${(s.I * 1e8).toFixed(1)} cm⁴　J = ${(s.J * 1e8).toFixed(1)} cm⁴`;
+}
+$('shSquare').onclick = () => setSection('square');
+$('shRound').onclick = () => setSection('round');
+$('solid').addEventListener('input', () => { updateSecInfo(); onShapeChange(); });
+['colorMode', 'showGhost'].forEach(id => $(id).addEventListener('input', () => state.result && drawMembers()));
+$('showNet').addEventListener('input', drawCtrl);
+$('autoScale').addEventListener('input', () => state.result && drawMembers());
+$('scale').addEventListener('input', () => { $('autoScale').checked = false; state.result && drawMembers(); });
+['sweepVar', 'sweepMin', 'sweepMax'].forEach(id => $(id).addEventListener('change', () => scheduleHeavy(0)));
+$('logY').addEventListener('input', drawSweep);
+new ResizeObserver(() => { drawSens(); drawSweep(); }).observe($('sweep'));
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); }
+
+$('modeNote').textContent = '二軸＋対角の対称（D4）で25点を5変数に縮約。四隅は支点として z = 0 に固定。';
+buildSliders(); buildNet(); buildSweepVars();
+members.geometry = squareGeo; updateSecInfo();
+resize(); applyTheme(); runMain(); scheduleHeavy(50);
+loop();
+})();
+</script>
+
+</body>
+</html>
