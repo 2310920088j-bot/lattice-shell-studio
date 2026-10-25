@@ -117,13 +117,14 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
   <header>
     <div>
       <h1>ラチスシェル形状スタジオ</h1>
-      <p class="sub">10×10グリッド（1マス1 m・11×11節点）・ベジエ曲面 5×5制御点・四隅固定・3次元骨組FEM（ブラウザ内で計算）</p>
+      <p class="sub">10×10グリッド（1マス1 m・11×11節点）・ベジエ曲面 5×5制御点・四隅固定・通常ラチス／レシプロカル・3次元骨組FEM（ブラウザ内で計算）</p>
     </div>
     <div class="readouts" aria-live="polite">
       <div class="ro main"><span class="k">コンプライアンス C = ½fᵀu</span><span class="v" id="roC">–</span></div>
       <div class="ro"><span class="k">最大変位</span><span class="v" id="roD">–</span></div>
       <div class="ro"><span class="k">部材体積</span><span class="v" id="roV">–</span></div>
       <div class="ro"><span class="k">総鉛直荷重</span><span class="v" id="roP">–</span></div>
+      <div class="ro"><span class="k" id="roCmpK">比較</span><span class="v" id="roCmp">–</span></div>
       <div class="ro"><span class="k">最高高さ</span><span class="v" id="roH">–</span></div>
     </div>
   </header>
@@ -136,6 +137,14 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
     </div>
 
     <div class="rail">
+      <section class="card">
+        <h2>構造モデル</h2>
+        <div class="seg" role="group" aria-label="接合モデル">
+          <button id="jRigid" aria-pressed="false">通常ラチス</button>
+          <button id="jRec" aria-pressed="true">レシプロカル</button>
+        </div>
+        <p class="note" id="jointNote"></p>
+      </section>
       <section class="card">
         <h2>形状変数</h2>
         <div class="seg" role="group" aria-label="変数モード">
@@ -170,7 +179,7 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
         <label class="check"><input type="checkbox" id="solid" checked> 中実断面</label>
         <div class="field"><span>板厚 t <small>mm</small></span><input type="number" id="t" value="6" step="0.1" min="0.1" disabled></div>
         <p class="note" id="secInfo"></p>
-        <div class="field"><span>ヤング係数 E <small>N/mm²</small></span><input type="number" id="E" value="205000" step="1000" min="1"></div>
+        <div class="field"><span>ヤング係数 E <small>N/mm²</small></span><input type="number" id="E" value="210000" step="1000" min="1"></div>
         <div class="field"><span>ポアソン比 ν</span><input type="number" id="nu" value="0.3" step="0.01" min="0" max="0.49"></div>
         <div class="field"><span>密度 ρ <small>kg/m³</small></span><input type="number" id="rho" value="7850" step="10" min="0"></div>
       </section>
@@ -203,13 +212,13 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
       <div class="toolbar">
         <label for="sweepVar">変数</label><select id="sweepVar"></select>
         <label for="sweepMin">範囲</label><input type="number" id="sweepMin" value="-2" step="0.5">
-        <span>〜</span><input type="number" id="sweepMax" value="8" step="0.5">
+        <span>〜</span><input type="number" id="sweepMax" value="12" step="0.5">
         <span>m</span>
         <label class="check" style="font-size:12px"><input type="checkbox" id="logY" checked> 対数軸</label>
         <span class="status" id="sweepStatus"></span>
       </div>
       <div class="chart"><canvas id="sweep"></canvas></div>
-      <p class="note">他の変数を現在値に固定したまま、選んだ変数だけを動かしたときのC。縦線が現在値。</p>
+      <p class="note">他の変数を現在値に固定したまま、選んだ変数だけを動かしたときのC。実線が表示中のモデル、破線がもう一方のモデル。縦線が現在値。</p>
     </section>
   </div>
 </div>
@@ -315,24 +324,34 @@ const FEM = (() => {
   // p: { n, L, ctrl[25], E(Pa), nu, D(m), t(m), rho, P(N per node), useP, useSW }
   function analyze(p) {
     const g = buildGeometry(p.n, p.L, p.ctrl);
-    const { A, I, J } = section(p);
-    const E = p.E, G = E / (2*(1+p.nu));
-    const N = g.nNodes * 6;
-    const bw = 6 * (g.nn + 1) - 1;
+    const sec = section(p);
+    const A = p.A ?? sec.A, I = p.I ?? sec.I, J = p.J ?? sec.J;
+    const E = p.E, G = p.G ?? E / (2*(1+p.nu));
+    // joint: 'rigid' (6 dof/node) or 'reciprocal' (9 dof/node: shared translations,
+    // separate rotation sets for x-direction and y-direction members at each crossing)
+    const rec = p.joint === 'reciprocal';
+    const ndf = rec ? 9 : 6;
+    const nX = p.n * g.nn; // first nX elements run along x
+    const N = g.nNodes * ndf;
+    const bw = ndf * (g.nn + 1) - 1;
     const W = bw + 1;
     const K = new Float64Array(N * W);
     const f = new Float64Array(N);
     const X = g.X;
     const els = [];
     let totalLen = 0;
-    for (const [a, b] of g.elems) {
+    for (let ei = 0; ei < g.elems.length; ei++) {
+      const [a, b] = g.elems[ei];
+      const ro = rec && ei >= nX ? 6 : 3;
       const x1 = [X[3*a], X[3*a+1], X[3*a+2]], x2 = [X[3*b], X[3*b+1], X[3*b+2]];
       const { L, R } = frameOf(x1, x2);
       totalLen += L;
       const Kg = globalK(localK(E, G, A, I, J, L), R);
       const dofs = [];
-      for (let q = 0; q < 6; q++) dofs.push(6*a+q);
-      for (let q = 0; q < 6; q++) dofs.push(6*b+q);
+      for (let q = 0; q < 3; q++) dofs.push(ndf*a+q);
+      for (let q = 0; q < 3; q++) dofs.push(ndf*a+ro+q);
+      for (let q = 0; q < 3; q++) dofs.push(ndf*b+q);
+      for (let q = 0; q < 3; q++) dofs.push(ndf*b+ro+q);
       for (let r = 0; r < 12; r++) for (let c = 0; c < 12; c++) {
         const gi = dofs[r], gj = dofs[c];
         if (gj < gi) continue;
@@ -340,15 +359,15 @@ const FEM = (() => {
       }
       if (p.useSW) {
         const w = p.rho * 9.80665 * A * L / 2;
-        f[6*a+2] -= w; f[6*b+2] -= w;
+        f[ndf*a+2] -= w; f[ndf*b+2] -= w;
       }
       els.push({ a, b, L, R, Kg, dofs });
     }
-    if (p.useP) for (let id = 0; id < g.nNodes; id++) f[6*id+2] -= p.P;
+    if (p.useP) for (let id = 0; id < g.nNodes; id++) f[ndf*id+2] -= p.P;
 
     // Boundary conditions: fixed corners
     const fixed = new Uint8Array(N);
-    for (const s of g.supports) for (let q = 0; q < 6; q++) fixed[6*s+q] = 1;
+    for (const s of g.supports) for (let q = 0; q < ndf; q++) fixed[ndf*s+q] = 1;
     for (let i = 0; i < N; i++) if (fixed[i]) {
       for (let k = 0; k < W; k++) K[i*W+k] = 0;
       for (let k = 1; k <= bw && i-k >= 0; k++) K[(i-k)*W + k] = 0;
@@ -389,7 +408,7 @@ const FEM = (() => {
 
     let maxDisp = 0, maxDispNode = 0;
     for (let id = 0; id < g.nNodes; id++) {
-      const d = Math.hypot(u[6*id], u[6*id+1], u[6*id+2]);
+      const d = Math.hypot(u[ndf*id], u[ndf*id+1], u[ndf*id+2]);
       if (d > maxDisp) { maxDisp = d; maxDispNode = id; }
     }
     const axial = new Float64Array(els.length), energy = new Float64Array(els.length);
@@ -402,8 +421,10 @@ const FEM = (() => {
       const du = (ue[6]-ue[0])*ex[0] + (ue[7]-ue[1])*ex[1] + (ue[8]-ue[2])*ex[2];
       axial[k] = E * A / e.L * du;
     });
-    const totalLoad = -f.reduce((s, v, i) => s + (i % 6 === 2 ? v : 0), 0);
-    return { geom: g, u, C, maxDisp, maxDispNode, axial, energy, totalLen, volume: totalLen * A, A, I, totalLoad };
+    const totalLoad = -f.reduce((s, v, i) => s + (i % ndf === 2 ? v : 0), 0);
+    const disp = new Float64Array(g.nNodes * 3);
+    for (let id = 0; id < g.nNodes; id++) for (let q = 0; q < 3; q++) disp[3*id+q] = u[ndf*id+q];
+    return { geom: g, u, disp, ndf, C, maxDisp, maxDispNode, axial, energy, totalLen, volume: totalLen * A, A, I, totalLoad };
   }
 
   // Symmetric (D4) 5-variable mapping for the 5x5 control net. Corners fixed at z=0.
@@ -435,9 +456,12 @@ const ORBIT_INFO = [
   { name: 'z3', desc: '内側・辺寄り（8点）' },
   { name: 'z4', desc: '中央（1点）' },
 ];
-const ZMIN = -3, ZMAX = 8;
+const ZMIN = -3, ZMAX = 12;
 let secShape = 'square';
+const JOINT_NAME = { rigid: '通常ラチス', reciprocal: 'レシプロカル' };
+const otherJoint = j => j === 'rigid' ? 'reciprocal' : 'rigid';
 const state = {
+  joint: 'reciprocal',
   mode: 'sym',
   z5: [1.6, 2.4, 3.2, 3.9, 4.4],
   ctrl: null,
@@ -458,7 +482,7 @@ function params(ctrl) {
     shape: secShape, solid: $('solid').checked,
     D: num('D', 100) / 1000, t: num('t', 6) / 1000,
     rho: num('rho', 7850), P: num('P', 1) * 1000,
-    useP: $('useP').checked, useSW: $('useSW').checked,
+    useP: $('useP').checked, useSW: $('useSW').checked, joint: state.joint,
   };
 }
 function currentCtrl() { return state.mode === 'sym' ? FEM.expandSym(state.z5) : state.ctrl.slice(); }
@@ -627,6 +651,10 @@ const ghost = new THREE.LineSegments(ghostGeo, ghostMat); scene.add(ghost);
 
 const supMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
 const supports = [];
+const nodeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const nodeMarks = new THREE.InstancedMesh(new THREE.TorusGeometry(0.11, 0.035, 8, 20), nodeMat, (N_CELL + 1) ** 2);
+nodeMarks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(nodeMarks);
 for (let s = 0; s < 4; s++) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.2), supMat); scene.add(m); supports.push(m); }
 
 const ctrlGeo = new THREE.SphereGeometry(0.17, 16, 12);
@@ -649,7 +677,7 @@ function applyTheme() {
   grid.material.color = line;
   ghostMat.color.set(css('--muted'));
   netMat.color.set(css('--ctrl')); stemMat.color.set(css('--ctrl'));
-  supMat.color.set(css('--ink'));
+  supMat.color.set(css('--ink')); nodeMat.color.set(css('--ink'));
   updateCtrlColors();
   if (state.result) drawMembers();
   drawSens(); drawSweep();
@@ -696,7 +724,7 @@ function displayScale(r) {
   const s = +$('scale').value; $('scaleVal').textContent = '×' + s; return s;
 }
 function drawMembers() {
-  const r = state.result, g = r.geom, X = g.X, u = r.u, s = displayScale(r);
+  const r = state.result, g = r.geom, X = g.X, u = r.disp, s = displayScale(r);
   const rad = Math.max(0.035, Math.min(0.12, parseFloat($('D').value) / 1000 / 2 * 0.8));
   const mode = $('colorMode').value;
   let maxE = 0, maxN = 0;
@@ -705,8 +733,8 @@ function drawMembers() {
   const eTop = Math.max(...r.energy) || 1;
   const gp = ghostGeo.attributes.position.array;
   g.elems.forEach(([a, b], k) => {
-    vA.set(X[3*a] + s*u[6*a], X[3*a+1] + s*u[6*a+1], X[3*a+2] + s*u[6*a+2]);
-    vB.set(X[3*b] + s*u[6*b], X[3*b+1] + s*u[6*b+1], X[3*b+2] + s*u[6*b+2]);
+    vA.set(X[3*a] + s*u[3*a], X[3*a+1] + s*u[3*a+1], X[3*a+2] + s*u[3*a+2]);
+    vB.set(X[3*b] + s*u[3*b], X[3*b+1] + s*u[3*b+1], X[3*b+2] + s*u[3*b+2]);
     dir.subVectors(vB, vA); const len = dir.length(); dir.normalize();
     q.setFromUnitVectors(up, dir); mid.addVectors(vA, vB).multiplyScalar(0.5); sc.set(rad, len, rad);
     mtx.compose(mid, q, sc); members.setMatrixAt(k, mtx);
@@ -721,6 +749,11 @@ function drawMembers() {
   ghostGeo.attributes.position.needsUpdate = true; ghostGeo.computeBoundingSphere();
   ghost.visible = $('showGhost').checked;
   g.supports.forEach((id, k) => supports[k].position.set(X[3*id], X[3*id+1], X[3*id+2] - 0.12));
+  for (let id = 0; id < g.nNodes; id++) {
+    mtx.makeTranslation(X[3*id] + s*u[3*id], X[3*id+1] + s*u[3*id+1], X[3*id+2] + s*u[3*id+2]);
+    nodeMarks.setMatrixAt(id, mtx);
+  }
+  nodeMarks.instanceMatrix.needsUpdate = true;
   drawLegend(mode, eTop, maxN);
 }
 function drawLegend(mode, eTop, maxN) {
@@ -780,6 +813,13 @@ function runMain() {
     $('roP').innerHTML = `${fmt(r.totalLoad / 1000, 4)}<small>kN</small>`;
     let h = 0; for (let i = 2; i < r.geom.X.length; i += 3) h = Math.max(h, r.geom.X[i]);
     $('roH').innerHTML = `${fmt(h, 3)}<small>m</small>`;
+    const oj = otherJoint(state.joint);
+    try {
+      const ro = FEM.analyze({ ...params(), joint: oj });
+      $('roCmpK').textContent = `${JOINT_NAME[oj]}のC（比）`;
+      $('roCmp').innerHTML = `${fmt(ro.C / 1000)}<small>×${(r.C / ro.C).toFixed(2)}</small>`;
+    } catch (e) { $('roCmp').textContent = '–'; }
+    nodeMarks.visible = state.joint === 'reciprocal';
     drawMembers();
   } catch (e) {
     $('err').textContent = e.message; $('err').hidden = false;
@@ -807,14 +847,16 @@ self.onmessage = (e) => {
       sens.push((cp - cm) / (2 * h) / 1000);
     }
   } catch (err) { self.postMessage({ id, error: err.message }); return; }
-  const xs = [], ys = [];
+  const xs = [], ys = [], ys2 = [];
+  const oj = p.joint === 'rigid' ? 'reciprocal' : 'rigid';
   for (let s = 0; s < npts; s++) {
     const v = lo + (hi - lo) * s / (npts - 1);
-    let C = NaN;
+    let C = NaN, C2 = NaN;
     try { C = FEM.analyze({ ...p, ctrl: withVar(k, v) }).C / 1000; } catch (err) {}
-    xs.push(v); ys.push(C);
+    try { C2 = FEM.analyze({ ...p, joint: oj, ctrl: withVar(k, v) }).C / 1000; } catch (err) {}
+    xs.push(v); ys.push(C); ys2.push(C2);
   }
-  self.postMessage({ id, sens, xs, ys, k, n: nv * 2 + npts });
+  self.postMessage({ id, sens, xs, ys, ys2, k, n: nv * 2 + npts * 2 });
 };`;
 let worker = null, jobId = 0, jobT0 = 0;
 try {
@@ -822,14 +864,14 @@ try {
   worker.onmessage = e => {
     const d = e.data; if (d.id !== jobId) return;
     if (d.error) { $('sweepStatus').textContent = d.error; return; }
-    sensData = d.sens; sweepData = { k: d.k, xs: d.xs, ys: d.ys };
+    sensData = d.sens; sweepData = { k: d.k, xs: d.xs, ys: d.ys, ys2: d.ys2 };
     $('sweepStatus').textContent = `${(performance.now() - jobT0).toFixed(0)} ms（${d.n}回解析）`;
     drawSens(); drawSweep();
   };
 } catch (e) { worker = null; }
 function sweepRange() {
   let lo = parseFloat($('sweepMin').value), hi = parseFloat($('sweepMax').value);
-  if (!(hi > lo)) { lo = -2; hi = 8; }
+  if (!(hi > lo)) { lo = -2; hi = 12; }
   return { lo, hi };
 }
 function runHeavy() {
@@ -845,9 +887,9 @@ function runHeavy() {
       const v = getVar(k);
       g.push((FEM.analyze({ ...job.p, ctrl: ctrlWithVar(k, v + h) }).C - FEM.analyze({ ...job.p, ctrl: ctrlWithVar(k, v - h) }).C) / (2 * h) / 1000);
     }
-    const xs = [], ys = [];
-    for (let s = 0; s < job.npts; s++) { const v = lo + (hi - lo) * s / (job.npts - 1); let C = NaN; try { C = FEM.analyze({ ...job.p, ctrl: ctrlWithVar(job.k, v) }).C / 1000; } catch (e) {} xs.push(v); ys.push(C); }
-    sensData = g; sweepData = { k: job.k, xs, ys };
+    const xs = [], ys = [], ys2 = [];
+    for (let s = 0; s < job.npts; s++) { const v = lo + (hi - lo) * s / (job.npts - 1); let C = NaN, C2 = NaN; try { C = FEM.analyze({ ...job.p, ctrl: ctrlWithVar(job.k, v) }).C / 1000; C2 = FEM.analyze({ ...job.p, joint: otherJoint(job.p.joint), ctrl: ctrlWithVar(job.k, v) }).C / 1000; } catch (e) {} xs.push(v); ys.push(C); ys2.push(C2); }
+    sensData = g; sweepData = { k: job.k, xs, ys, ys2 };
     $('sweepStatus').textContent = `${(performance.now() - jobT0).toFixed(0)} ms`;
   } catch (e) { $('sweepStatus').textContent = e.message; }
   drawSens(); drawSweep();
@@ -903,14 +945,14 @@ function drawSweep() {
   ctx.clearRect(0, 0, w, h);
   const ink = css('--ink'), muted = css('--muted'), line = css('--line'), acc = css('--accent'), ctrl = css('--ctrl');
   const log = $('logY').checked;
-  const { xs, ys } = sweepData;
+  const { xs, ys } = sweepData, ys2 = sweepData.ys2 || [];
   ctx.font = '11px ' + css('--font-mono');
-  const valid = ys.filter(v => Number.isFinite(v) && (!log || v > 0));
+  const valid = ys.concat(ys2).filter(v => Number.isFinite(v) && (!log || v > 0));
   if (!valid.length) return;
   const tf = v => log ? Math.log10(v) : v;
   let ymin = Math.min(...valid.map(tf)), ymax = Math.max(...valid.map(tf));
   if (ymax - ymin < 1e-9) { ymax += 0.5; ymin -= 0.5; }
-  const padL = 62, padR = 12, padT = 10, padB = 26;
+  const padL = 62, padR = 12, padT = 28, padB = 26;
   const X = v => padL + (v - xs[0]) / (xs[xs.length - 1] - xs[0]) * (w - padL - padR);
   const Y = v => padT + (1 - (tf(v) - ymin) / (ymax - ymin)) * (h - padT - padB);
   ctx.font = '11px ' + css('--font-mono'); ctx.lineWidth = 1;
@@ -925,10 +967,18 @@ function drawSweep() {
   // x ticks
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   niceTicks(xs[0], xs[xs.length - 1], 6).forEach(v => { const x = X(v); ctx.fillStyle = muted; ctx.fillText(v, x, h - padB + 6); ctx.strokeStyle = line; ctx.beginPath(); ctx.moveTo(x, h - padB); ctx.lineTo(x, h - padB + 3); ctx.stroke(); });
-  // area + line
-  ctx.beginPath(); let started = false;
-  xs.forEach((x, i) => { const v = ys[i]; if (!Number.isFinite(v) || (log && v <= 0)) { started = false; return; } const px = X(x), py = Y(v); started ? ctx.lineTo(px, py) : ctx.moveTo(px, py); started = true; });
-  ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.stroke();
+  const path = arr => { ctx.beginPath(); let started = false;
+    xs.forEach((x, i) => { const v = arr[i]; if (!Number.isFinite(v) || (log && v <= 0)) { started = false; return; } const px = X(x), py = Y(v); started ? ctx.lineTo(px, py) : ctx.moveTo(px, py); started = true; }); };
+  if (ys2.length) { path(ys2); ctx.strokeStyle = muted; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]); }
+  path(ys); ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.stroke();
+  // legend
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  const lgX = padL, lgY = 9;
+  ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(lgX, lgY); ctx.lineTo(lgX + 18, lgY); ctx.stroke();
+  ctx.fillStyle = ink; ctx.fillText(JOINT_NAME[state.joint] + '（表示中）', lgX + 24, lgY);
+  if (ys2.length) { const lx2 = lgX + 24 + ctx.measureText(JOINT_NAME[state.joint] + '（表示中）').width + 16;
+    ctx.strokeStyle = muted; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(lx2, lgY); ctx.lineTo(lx2 + 18, lgY); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = muted; ctx.fillText(JOINT_NAME[otherJoint(state.joint)], lx2 + 24, lgY); }
   // minimum marker
   let mi = -1; ys.forEach((v, i) => { if (Number.isFinite(v) && (mi < 0 || v < ys[mi])) mi = i; });
   if (mi >= 0) { ctx.fillStyle = acc; ctx.beginPath(); ctx.arc(X(xs[mi]), Y(ys[mi]), 3.5, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = ink; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; const lbl = `最小 ${fmt(ys[mi], 3)} kN·m @ ${xs[mi].toFixed(2)} m`; const tw = ctx.measureText(lbl).width; const px = X(xs[mi]), py = Y(ys[mi]); const lx = px + 8 + tw > w - padR ? px - 8 - tw : px + 8; const ly = py - 6 < padT + 12 ? py + 16 : py - 6; ctx.fillText(lbl, lx, ly); }
@@ -996,6 +1046,16 @@ function updateSecInfo() {
   const name = (p.shape === 'square' ? '角形' : '丸形') + (p.solid ? '鋼（中実）' : '鋼管');
   $('secInfo').textContent = `${name}　A = ${(s.A * 1e4).toFixed(2)} cm²　I = ${(s.I * 1e8).toFixed(1)} cm⁴　J = ${(s.J * 1e8).toFixed(1)} cm⁴`;
 }
+function setJoint(j) {
+  state.joint = j;
+  $('jRigid').setAttribute('aria-pressed', j === 'rigid'); $('jRec').setAttribute('aria-pressed', j === 'reciprocal');
+  $('jointNote').textContent = j === 'reciprocal'
+    ? '各交差部で並進3成分のみ共有し、x方向部材とy方向部材の回転は独立（OpenSeesの equalDOF 1,2,3 と同じ扱い）。各方向の部材は交差部を連続して通る。黒い輪が回転解放点。'
+    : '各交差部で6自由度すべてを共有する剛接合。';
+  onShapeChange();
+}
+$('jRigid').onclick = () => setJoint('rigid');
+$('jRec').onclick = () => setJoint('reciprocal');
 $('shSquare').onclick = () => setSection('square');
 $('shRound').onclick = () => setSection('round');
 $('solid').addEventListener('input', () => { updateSecInfo(); onShapeChange(); });
@@ -1013,7 +1073,7 @@ function loop() { controls.update(); renderer.render(scene, camera); requestAnim
 
 $('modeNote').textContent = '二軸＋対角の対称（D4）で25点を5変数に縮約。四隅は支点として z = 0 に固定。';
 buildSliders(); buildNet(); buildSweepVars();
-members.geometry = squareGeo; updateSecInfo();
+members.geometry = squareGeo; updateSecInfo(); setJoint('reciprocal');
 resize(); applyTheme(); runMain(); scheduleHeavy(50);
 loop();
 })();
