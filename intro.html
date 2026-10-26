@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ラチスシェル形状ビューア</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@400;500;700&display=swap">
+<style>
+/* Layout: instrument bench — 3D model fills the bench, a control rail on the right, readouts across the top, analysis strip below */
+:root {
+  --bg: #e9edef;
+  --panel: #ffffff;
+  --ink: #15202b;
+  --muted: #5a6672;
+  --line: #cfd6dc;
+  --accent: #0e6e66;
+  --accent-soft: #d5ebe8;
+  --tension: #c8423c;
+  --compress: #2a64b0;
+  --neutral-member: #8a96a1;
+  --ctrl: #e08a1e;
+  --font-body: "IBM Plex Sans JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --view-bg: #f6f8f9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1317; --panel: #161d23; --ink: #e2e8ed; --muted: #8e9aa5; --line: #2a343d;
+    --accent: #3cc7b8; --accent-soft: #163a37; --tension: #f0716b; --compress: #6aa3ef;
+    --neutral-member: #7d8995; --ctrl: #f2a64a; --view-bg: #11171c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1317; --panel: #161d23; --ink: #e2e8ed; --muted: #8e9aa5; --line: #2a343d;
+  --accent: #3cc7b8; --accent-soft: #163a37; --tension: #f0716b; --compress: #6aa3ef;
+  --neutral-member: #7d8995; --ctrl: #f2a64a; --view-bg: #11171c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 28px;
+}
+.wrap { max-width: 1380px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: 0.02em; text-wrap: balance; }
+.sub { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+.opt { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.opt-k { font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; line-height: 1.2; align-self: center; margin-right: 8px; display: flex; flex-direction: column; }
+.opt-k small { font-family: var(--font-mono); font-size: 11.5px; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: 2px; }
+.opt-btn { font: inherit; font-size: 15px; font-weight: 500; padding: 9px 18px; border-radius: 6px; cursor: pointer;
+  border: 1.5px solid var(--accent); background: var(--panel); color: var(--accent); }
+.opt-btn:hover { background: var(--accent-soft); }
+.opt-btn[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.opt-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.readouts { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
+.ro { padding: 8px 16px; display: flex; flex-direction: column; min-width: 112px; border-right: 1px solid var(--line); }
+.ro:last-child { border-right: 0; }
+.ro .k { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+.ro .v { font-family: var(--font-mono); font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ro .v small { font-size: 11px; color: var(--muted); margin-left: 3px; }
+.ro.over { background: color-mix(in srgb, var(--tension) 10%, var(--panel)); }
+.ro.over .v, .ro.over .v small, .ro.over .k { color: var(--tension); }
+.ro.over .v { font-weight: 500; }
+.ro.main .v { color: var(--accent); font-size: 22px; font-weight: 500; }
+
+.bench { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; }
+.view { position: relative; background: var(--view-bg); border: 1px solid var(--line); border-radius: 6px; min-height: 520px; overflow: hidden; }
+.view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.view .hint { position: absolute; left: 12px; bottom: 10px; font-size: 11.5px; color: var(--muted); pointer-events: none; }
+.legend { position: absolute; right: 12px; top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; font-size: 11px; min-width: 170px; }
+.legend .bar { height: 8px; border-radius: 2px; margin: 4px 0 2px; }
+.legend .ends { display: flex; justify-content: space-between; font-family: var(--font-mono); color: var(--muted); }
+.err { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); background: var(--tension); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12.5px; }
+
+.rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.card h2 { font-size: 12px; margin: 0; color: var(--muted); letter-spacing: 0.08em; font-weight: 500; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--ink); padding: 6px 4px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.slider { display: grid; grid-template-columns: 30px minmax(0,1fr) 58px; align-items: center; gap: 8px; }
+.slider label { font-family: var(--font-mono); font-size: 13px; }
+.slider .meta { grid-column: 2 / 4; font-size: 11px; color: var(--muted); margin-top: -8px; }
+.slider.sel label { color: var(--ctrl); font-weight: 500; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+input[type=number], select { width: 100%; font-family: var(--font-mono); font-size: 12.5px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--ink); font-variant-numeric: tabular-nums; }
+.net { display: grid; grid-template-columns: 18px repeat(5, minmax(0,1fr)); gap: 3px; font-size: 10.5px; align-items: center; }
+.net .ax { color: var(--muted); text-align: center; font-family: var(--font-mono); }
+.cell { border: 1px solid var(--line); border-radius: 3px; text-align: center; padding: 3px 0; font-family: var(--font-mono); font-size: 11px; line-height: 1.25; cursor: pointer; background: var(--bg); min-width: 0; }
+.cell b { display: block; font-weight: 500; font-size: 10px; color: var(--muted); }
+.cell.fixed { opacity: 0.55; cursor: default; }
+.cell.sel { outline: 2px solid var(--ctrl); outline-offset: -1px; }
+.cell input { width: 100%; border: 0; background: transparent; text-align: center; padding: 2px 0; font-size: 11px; }
+.row { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 4px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, .seg button:focus-visible, .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.field { display: grid; grid-template-columns: minmax(0,1fr) 92px; align-items: center; gap: 8px; font-size: 12.5px; }
+.field span small { color: var(--muted); }
+.check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.note { font-size: 11.5px; color: var(--muted); margin: 0; }
+
+.strip { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); gap: 14px; }
+.strip .card { min-height: 250px; }
+.chart { position: relative; width: 100%; height: 210px; }
+.chart canvas { width: 100%; height: 100%; display: block; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
+.toolbar select, .toolbar input { width: auto; }
+.toolbar input[type=number] { width: 64px; }
+.status { font-size: 11px; color: var(--muted); margin-left: auto; font-family: var(--font-mono); }
+
+@media (max-width: 960px) {
+  .bench { grid-template-columns: minmax(0,1fr); }
+  .view { min-height: 420px; height: 62vh; }
+  .strip { grid-template-columns: minmax(0,1fr); }
+}
+@media (min-width: 961px) { .view { height: calc(100vh - 150px); max-height: 820px; } }
+@media (max-width: 520px) { .opt-k { flex-basis: 100%; } } 
+@media (max-width: 520px) { .ro { min-width: 50%; border-bottom: 1px solid var(--line); } .legend { min-width: 0; } }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="opt" role="group" aria-label="最適形状">
+        <span class="opt-k">最適形状<small>体積制約 V ≤ 2.5 m³</small></span>
+        <button class="opt-btn" id="pOptRec" aria-pressed="false">レシプロカル</button>
+        <button class="opt-btn" id="pOptRig" aria-pressed="false">通常ラチス</button>
+      </div>
+      <p class="sub">10 m × 10 m（10×10グリッド）・四隅固定・各節点 1 kN 鉛直荷重・角形断面 100×100 mm・E = 2.1×10⁸ kN/m²</p>
+    </div>
+    <div class="readouts" aria-live="polite">
+      <div class="ro main"><span class="k">コンプライアンス C = ½fᵀu</span><span class="v" id="roC">–</span></div>
+      <div class="ro"><span class="k" id="roCmpK">比較</span><span class="v" id="roCmp">–</span></div>
+      <div class="ro" id="roVbox"><span class="k" id="roVk">部材体積</span><span class="v" id="roV">–</span></div>
+      <div class="ro"><span class="k">最大変位</span><span class="v" id="roD">–</span></div>
+    </div>
+  </header>
+
+  <div class="bench">
+    <div class="view" id="view">
+      <div class="legend" id="legend"></div>
+      <div class="err" id="err" hidden></div>
+      <div class="hint">ドラッグ：回転　右ドラッグ：移動　ホイール：拡大　橙の制御点を上下ドラッグ：形状変更</div>
+    </div>
+
+    <div class="rail">
+      <section class="card">
+        <h2>構造モデル</h2>
+        <div class="seg" role="group" aria-label="構造モデル">
+          <button id="jRigid" aria-pressed="false">通常ラチス</button>
+          <button id="jRec" aria-pressed="true">レシプロカル</button>
+        </div>
+        <p class="note" id="jointNote"></p>
+      </section>
+
+      <section class="card">
+        <h2>形状変数（ベジエ制御点の高さ）</h2>
+        <div id="symSliders" style="display:flex;flex-direction:column;gap:10px"></div>
+        <p class="note">5×5の制御点を二軸＋対角の対称で5変数にまとめています。四隅は支点（z = 0）。</p>
+      </section>
+
+      <section class="card">
+        <h2>表示</h2>
+        <div class="field"><span>部材の色</span>
+          <select id="colorMode">
+            <option value="energy">ひずみエネルギー</option>
+            <option value="axial">軸力</option>
+            <option value="none">単色</option>
+          </select>
+        </div>
+        <label class="check"><input type="checkbox" id="autoScale" checked> 変形倍率を自動</label>
+        <div class="slider"><label for="scale">×</label><input type="range" id="scale" min="0" max="500" step="1" value="50"><span id="scaleVal" style="font-family:var(--font-mono);font-size:12px">×50</span></div>
+        <label class="check"><input type="checkbox" id="showNet" checked> 制御点ネットを表示</label>
+        <label class="check"><input type="checkbox" id="showGhost" checked> 変形前形状を表示</label>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ===== Lattice shell FEM (3D frame, Euler-Bernoulli) =====
+const FEM = (() => {
+  function bern4(t) {
+    const s = 1 - t;
+    return [s*s*s*s, 4*t*s*s*s, 6*t*t*s*s, 4*t*t*t*s, t*t*t*t];
+  }
+
+  // ctrl: 25 z-values, index = j*5 + i (i along x, j along y)
+  function buildGeometry(n, L, ctrl) {
+    const nn = n + 1;
+    const X = new Float64Array(nn * nn * 3);
+    for (let j = 0; j < nn; j++) {
+      const bv = bern4(j / n);
+      for (let i = 0; i < nn; i++) {
+        const bu = bern4(i / n);
+        let z = 0;
+        for (let b = 0; b < 5; b++) for (let a = 0; a < 5; a++) z += bu[a] * bv[b] * ctrl[b * 5 + a];
+        const id = j * nn + i;
+        X[3*id] = i * L; X[3*id+1] = j * L; X[3*id+2] = z;
+      }
+    }
+    const elems = [];
+    for (let j = 0; j < nn; j++) for (let i = 0; i < n; i++) elems.push([j*nn+i, j*nn+i+1]);
+    for (let i = 0; i < nn; i++) for (let j = 0; j < n; j++) elems.push([j*nn+i, (j+1)*nn+i]);
+    const supports = [0, n, n*nn, n*nn+n];
+    return { nn, nNodes: nn*nn, X, elems, supports };
+  }
+
+  function localK(E, G, A, I, J, L) {
+    const k = new Float64Array(144);
+    const s = (r, c, v) => { k[r*12+c] = v; k[c*12+r] = v; };
+    const a = E*A/L, t = G*J/L;
+    const b3 = 12*E*I/(L*L*L), b2 = 6*E*I/(L*L), b1 = 4*E*I/L, b0 = 2*E*I/L;
+    s(0,0,a); s(0,6,-a); s(6,6,a);
+    s(3,3,t); s(3,9,-t); s(9,9,t);
+    // bending in local x-y plane (v, θz)
+    s(1,1,b3); s(1,5,b2); s(1,7,-b3); s(1,11,b2);
+    s(5,5,b1); s(5,7,-b2); s(5,11,b0);
+    s(7,7,b3); s(7,11,-b2); s(11,11,b1);
+    // bending in local x-z plane (w, θy)
+    s(2,2,b3); s(2,4,-b2); s(2,8,-b3); s(2,10,-b2);
+    s(4,4,b1); s(4,8,b2); s(4,10,b0);
+    s(8,8,b3); s(8,10,b2); s(10,10,b1);
+    return k;
+  }
+
+  function frameOf(x1, x2) {
+    const dx = x2[0]-x1[0], dy = x2[1]-x1[1], dz = x2[2]-x1[2];
+    const L = Math.hypot(dx, dy, dz);
+    const ex = [dx/L, dy/L, dz/L];
+    let ref = [0, 0, 1];
+    if (Math.abs(ex[2]) > 0.999) ref = [0, 1, 0];
+    let ey = [ref[1]*ex[2]-ref[2]*ex[1], ref[2]*ex[0]-ref[0]*ex[2], ref[0]*ex[1]-ref[1]*ex[0]];
+    const m = Math.hypot(ey[0], ey[1], ey[2]); ey = ey.map(v => v/m);
+    const ez = [ex[1]*ey[2]-ex[2]*ey[1], ex[2]*ey[0]-ex[0]*ey[2], ex[0]*ey[1]-ex[1]*ey[0]];
+    return { L, R: [ex, ey, ez] };
+  }
+
+  // Global element stiffness Kg = T^T k T
+  function globalK(k, R) {
+    const Kg = new Float64Array(144);
+    for (let bi = 0; bi < 4; bi++) for (let bj = 0; bj < 4; bj++) {
+      // tmp = k_block * R
+      const tmp = new Float64Array(9);
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+        let s = 0;
+        for (let m = 0; m < 3; m++) s += k[(bi*3+r)*12 + bj*3+m] * R[m][c];
+        tmp[r*3+c] = s;
+      }
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+        let s = 0;
+        for (let m = 0; m < 3; m++) s += R[m][r] * tmp[m*3+c];
+        Kg[(bi*3+r)*12 + bj*3+c] = s;
+      }
+    }
+    return Kg;
+  }
+
+  // p.shape: 'round' | 'square', p.D: outer diameter / width [m], p.t: wall thickness [m], p.solid: bool
+  function section(p) {
+    const D = p.D;
+    const t = p.solid ? D/2 : Math.min(p.t, D/2);
+    const d = Math.max(0, D - 2*t);
+    if (p.shape === 'square') {
+      const A = D*D - d*d;
+      const I = (D**4 - d**4) / 12;
+      // torsion: solid square J = 0.1406 a^4 ; thin-walled square tube (Bredt) J = t (a - t)^3
+      const J = d === 0 ? 0.1406 * D**4 : t * (D - t)**3;
+      return { A, I, J };
+    }
+    const A = Math.PI/4 * (D*D - d*d);
+    const I = Math.PI/64 * (D**4 - d**4);
+    return { A, I, J: 2*I };
+  }
+
+  // p: { n, L, ctrl[25], E(Pa), nu, D(m), t(m), rho, P(N per node), useP, useSW }
+  function analyze(p) {
+    const g = buildGeometry(p.n, p.L, p.ctrl);
+    const sec = section(p);
+    const A = p.A ?? sec.A, I = p.I ?? sec.I, J = p.J ?? sec.J;
+    const E = p.E, G = p.G ?? E / (2*(1+p.nu));
+    // joint: 'rigid' (6 dof/node) or 'reciprocal' (9 dof/node: shared translations,
+    // separate rotation sets for x-direction and y-direction members at each crossing)
+    const rec = p.joint === 'reciprocal';
+    const ndf = rec ? 9 : 6;
+    const nX = p.n * g.nn; // first nX elements run along x
+    const N = g.nNodes * ndf;
+    const bw = ndf * (g.nn + 1) - 1;
+    const W = bw + 1;
+    const K = new Float64Array(N * W);
+    const f = new Float64Array(N);
+    const X = g.X;
+    const els = [];
+    let totalLen = 0;
+    for (let ei = 0; ei < g.elems.length; ei++) {
+      const [a, b] = g.elems[ei];
+      const ro = rec && ei >= nX ? 6 : 3;
+      const x1 = [X[3*a], X[3*a+1], X[3*a+2]], x2 = [X[3*b], X[3*b+1], X[3*b+2]];
+      const { L, R } = frameOf(x1, x2);
+      totalLen += L;
+      const Kg = globalK(localK(E, G, A, I, J, L), R);
+      const dofs = [];
+      for (let q = 0; q < 3; q++) dofs.push(ndf*a+q);
+      for (let q = 0; q < 3; q++) dofs.push(ndf*a+ro+q);
+      for (let q = 0; q < 3; q++) dofs.push(ndf*b+q);
+      for (let q = 0; q < 3; q++) dofs.push(ndf*b+ro+q);
+      for (let r = 0; r < 12; r++) for (let c = 0; c < 12; c++) {
+        const gi = dofs[r], gj = dofs[c];
+        if (gj < gi) continue;
+        K[gi*W + (gj-gi)] += Kg[r*12+c];
+      }
+      if (p.useSW) {
+        const w = p.rho * 9.80665 * A * L / 2;
+        f[ndf*a+2] -= w; f[ndf*b+2] -= w;
+      }
+      els.push({ a, b, L, R, Kg, dofs });
+    }
+    if (p.useP) for (let id = 0; id < g.nNodes; id++) f[ndf*id+2] -= p.P;
+
+    // Boundary conditions: fixed corners
+    const fixed = new Uint8Array(N);
+    for (const s of g.supports) for (let q = 0; q < ndf; q++) fixed[ndf*s+q] = 1;
+    for (let i = 0; i < N; i++) if (fixed[i]) {
+      for (let k = 0; k < W; k++) K[i*W+k] = 0;
+      for (let k = 1; k <= bw && i-k >= 0; k++) K[(i-k)*W + k] = 0;
+      K[i*W] = 1; f[i] = 0;
+    }
+
+    // Banded Cholesky (A = U^T U), in place
+    for (let i = 0; i < N; i++) {
+      const k0 = Math.max(0, i - bw);
+      let s = K[i*W];
+      for (let k = k0; k < i; k++) { const u = K[k*W + (i-k)]; s -= u*u; }
+      if (!(s > 0)) throw new Error('剛性行列が正定値ではありません（不安定構造の可能性）');
+      const d = Math.sqrt(s); K[i*W] = d;
+      const jmax = Math.min(N-1, i + bw);
+      for (let j = i+1; j <= jmax; j++) {
+        let t = K[i*W + (j-i)];
+        const kk0 = Math.max(0, j - bw);
+        for (let k = kk0; k < i; k++) t -= K[k*W + (i-k)] * K[k*W + (j-k)];
+        K[i*W + (j-i)] = t / d;
+      }
+    }
+    const u = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+      let s = f[i];
+      for (let k = Math.max(0, i-bw); k < i; k++) s -= K[k*W + (i-k)] * u[k];
+      u[i] = s / K[i*W];
+    }
+    for (let i = N-1; i >= 0; i--) {
+      let s = u[i];
+      const jmax = Math.min(N-1, i + bw);
+      for (let j = i+1; j <= jmax; j++) s -= K[i*W + (j-i)] * u[j];
+      u[i] = s / K[i*W];
+    }
+
+    let C = 0;
+    for (let i = 0; i < N; i++) C += f[i] * u[i];
+    C *= 0.5; // C = 1/2 f^T u
+
+    let maxDisp = 0, maxDispNode = 0;
+    for (let id = 0; id < g.nNodes; id++) {
+      const d = Math.hypot(u[ndf*id], u[ndf*id+1], u[ndf*id+2]);
+      if (d > maxDisp) { maxDisp = d; maxDispNode = id; }
+    }
+    const axial = new Float64Array(els.length), energy = new Float64Array(els.length);
+    els.forEach((e, k) => {
+      const ue = e.dofs.map(d => u[d]);
+      let s = 0;
+      for (let r = 0; r < 12; r++) { let t = 0; for (let c = 0; c < 12; c++) t += e.Kg[r*12+c] * ue[c]; s += ue[r] * t; }
+      energy[k] = 0.5 * s;
+      const ex = e.R[0];
+      const du = (ue[6]-ue[0])*ex[0] + (ue[7]-ue[1])*ex[1] + (ue[8]-ue[2])*ex[2];
+      axial[k] = E * A / e.L * du;
+    });
+    const totalLoad = -f.reduce((s, v, i) => s + (i % ndf === 2 ? v : 0), 0);
+    const disp = new Float64Array(g.nNodes * 3);
+    for (let id = 0; id < g.nNodes; id++) for (let q = 0; q < 3; q++) disp[3*id+q] = u[ndf*id+q];
+    return { geom: g, u, disp, ndf, C, maxDisp, maxDispNode, axial, energy, totalLen, volume: totalLen * A, A, I, totalLoad };
+  }
+
+  // Symmetric (D4) 5-variable mapping for the 5x5 control net. Corners fixed at z=0.
+  const fold = k => Math.min(k, 4 - k);
+  function orbitOf(i, j) {
+    const a = Math.min(fold(i), fold(j)), b = Math.max(fold(i), fold(j));
+    const key = a + ',' + b;
+    return { '0,0': -1, '0,1': 0, '0,2': 1, '1,1': 2, '1,2': 3, '2,2': 4 }[key];
+  }
+  function expandSym(z5) {
+    const c = new Array(25);
+    for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) {
+      const o = orbitOf(i, j); c[j*5+i] = o < 0 ? 0 : z5[o];
+    }
+    return c;
+  }
+  return { analyze, expandSym, orbitOf, buildGeometry, section };
+})();
+
+
+</script>
+<script>
+(() => {
+const N_CELL = 10, CELL = 1.0, SPAN = N_CELL * CELL;
+// 解析条件（研究コード rec.py と同一・固定）
+const FIXED = {
+  n: N_CELL, L: CELL,
+  E: 2.1e11, G: 2.1e11 / 2.6, nu: 0.3,           // Pa
+  A: 1.0e-2, I: 8.33e-6, J: 1.41e-5,             // m², m⁴
+  shape: 'square', solid: true, D: 0.1, t: 0.05, rho: 0,
+  P: 1000, useP: true, useSW: false,              // 1 kN / node
+};
+const VMAX = 2.5;
+const ORBIT_INFO = [
+  { name: 'z0', desc: '辺・隅寄り（8点）' },
+  { name: 'z1', desc: '辺・中央（4点）' },
+  { name: 'z2', desc: '内側・対角（4点）' },
+  { name: 'z3', desc: '内側・辺寄り（8点）' },
+  { name: 'z4', desc: '中央（1点）' },
+];
+const OPT_SHAPES = { reciprocal: [3.23, 8, 3.82, 0, 0], rigid: [2.08, 5.59, 1.49, 8, 8] };
+const JOINT_NAME = { rigid: '通常ラチス', reciprocal: 'レシプロカル' };
+const otherJoint = j => j === 'rigid' ? 'reciprocal' : 'rigid';
+const ZMIN = -3, ZMAX = 8;
+const state = { joint: 'reciprocal', z5: OPT_SHAPES.reciprocal.slice(), sel: null, result: null };
+
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const params = joint => ({ ...FIXED, joint: joint || state.joint, ctrl: FEM.expandSym(state.z5) });
+const ctrlToVar = ci => FEM.orbitOf(ci % 5, Math.floor(ci / 5));
+const setVar = (k, v) => { state.z5[k] = Math.max(ZMIN, Math.min(ZMAX, v)); };
+
+// ---------- sliders ----------
+function buildSliders() {
+  const box = $('symSliders'); box.innerHTML = '';
+  ORBIT_INFO.forEach((o, k) => {
+    const d = document.createElement('div'); d.className = 'slider'; d.id = 'sl' + k;
+    d.innerHTML = `<label for="z${k}">${o.name}</label>
+      <input type="range" id="z${k}" min="${ZMIN}" max="${ZMAX}" step="0.01" value="${state.z5[k]}">
+      <input type="number" id="zn${k}" step="0.1" min="${ZMIN}" max="${ZMAX}" value="${state.z5[k].toFixed(2)}">
+      <span class="meta">${o.desc}　m</span>`;
+    box.appendChild(d);
+    d.querySelector('input[type=range]').addEventListener('input', e => { setVar(k, +e.target.value); onShapeChange(); });
+    d.querySelector('input[type=number]').addEventListener('change', e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) { setVar(k, v); onShapeChange(); } });
+  });
+}
+function syncInputs() {
+  for (let k = 0; k < 5; k++) {
+    const r = $('z' + k), n = $('zn' + k);
+    if (document.activeElement !== r) r.value = state.z5[k];
+    if (document.activeElement !== n) n.value = state.z5[k].toFixed(2);
+  }
+}
+function markSelection() {
+  const v = state.sel == null ? null : ctrlToVar(state.sel);
+  for (let k = 0; k < 5; k++) $('sl' + k).classList.toggle('sel', v === k);
+  updateCtrlColors();
+}
+function markOptimum() {
+  for (const [j, id] of [['reciprocal', 'pOptRec'], ['rigid', 'pOptRig']]) {
+    const on = state.joint === j && OPT_SHAPES[j].every((v, k) => Math.abs(v - state.z5[k]) < 1e-9);
+    $(id).setAttribute('aria-pressed', on);
+  }
+}
+function setJoint(j) {
+  state.joint = j;
+  $('jRigid').setAttribute('aria-pressed', j === 'rigid'); $('jRec').setAttribute('aria-pressed', j === 'reciprocal');
+  $('jointNote').textContent = j === 'reciprocal'
+    ? '交差部で並進のみを共有し、x方向部材とy方向部材の回転は独立（回転解放）。黒い輪が回転解放点。'
+    : '交差部で並進・回転の6自由度すべてを共有する剛接合。';
+  onShapeChange();
+}
+function applyOptimum(j) { state.z5 = OPT_SHAPES[j].slice(); setJoint(j); }
+
+// ---------- three.js scene ----------
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+view.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 400);
+camera.up.set(0, 0, 1);
+camera.position.set(-9, -13, 13);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(SPAN / 2, SPAN / 2, 1.6);
+controls.enableDamping = true; controls.dampingFactor = 0.12;
+controls.update();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 0.85));
+const dl = new THREE.DirectionalLight(0xffffff, 0.55); dl.position.set(-10, -20, 30); scene.add(dl);
+
+const grid = new THREE.GridHelper(SPAN + 4, SPAN + 4, 0x888888, 0x888888);
+grid.rotation.x = Math.PI / 2; grid.position.set(SPAN / 2, SPAN / 2, -0.001);
+grid.material.transparent = true; grid.material.opacity = 0.18; scene.add(grid);
+
+const nElem = 2 * N_CELL * (N_CELL + 1);
+const memberGeo = new THREE.BoxGeometry(2, 1, 2);
+const memberMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const members = new THREE.InstancedMesh(memberGeo, memberMat, nElem);
+members.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(members);
+const tmpColor = new THREE.Color();
+for (let k = 0; k < nElem; k++) members.setColorAt(k, tmpColor.set(0x888888));
+
+const ghostGeo = new THREE.BufferGeometry();
+ghostGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nElem * 6), 3));
+const ghostMat = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.45 });
+const ghost = new THREE.LineSegments(ghostGeo, ghostMat); scene.add(ghost);
+
+const supMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+const supports = [];
+for (let s = 0; s < 4; s++) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.2), supMat); scene.add(m); supports.push(m); }
+const nodeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const nodeMarks = new THREE.InstancedMesh(new THREE.TorusGeometry(0.11, 0.035, 8, 20), nodeMat, (N_CELL + 1) ** 2);
+nodeMarks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(nodeMarks);
+
+const ctrlMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const ctrlMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.17, 16, 12), ctrlMat, 25);
+scene.add(ctrlMesh);
+for (let k = 0; k < 25; k++) ctrlMesh.setColorAt(k, tmpColor.set(0xe08a1e));
+const netGeo = new THREE.BufferGeometry();
+netGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(40 * 6), 3));
+const netMat = new THREE.LineDashedMaterial({ color: 0xe08a1e, dashSize: 0.25, gapSize: 0.18, transparent: true, opacity: 0.7 });
+const netLines = new THREE.LineSegments(netGeo, netMat); scene.add(netLines);
+const stemGeo = new THREE.BufferGeometry();
+stemGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(25 * 6), 3));
+const stemMat = new THREE.LineBasicMaterial({ color: 0xe08a1e, transparent: true, opacity: 0.25 });
+const stems = new THREE.LineSegments(stemGeo, stemMat); scene.add(stems);
+
+function applyTheme() {
+  scene.background = new THREE.Color(css('--view-bg'));
+  grid.material.color = new THREE.Color(css('--muted'));
+  ghostMat.color.set(css('--muted'));
+  netMat.color.set(css('--ctrl')); stemMat.color.set(css('--ctrl'));
+  supMat.color.set(css('--ink')); nodeMat.color.set(css('--ink'));
+  updateCtrlColors();
+  if (state.result) drawMembers();
+}
+function updateCtrlColors() {
+  const base = new THREE.Color(css('--ctrl')), selc = new THREE.Color(css('--accent')), fixedc = new THREE.Color(css('--muted'));
+  const v = state.sel == null ? null : ctrlToVar(state.sel);
+  for (let ci = 0; ci < 25; ci++) {
+    const vi = ctrlToVar(ci);
+    ctrlMesh.setColorAt(ci, vi < 0 ? fixedc : (v != null && v >= 0 && vi === v ? selc : base));
+  }
+  ctrlMesh.instanceColor.needsUpdate = true;
+}
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (!resize.done) { const f = Math.max(1, 1.25 / camera.aspect); camera.position.set(SPAN / 2 + (-9 - SPAN / 2) * f, SPAN / 2 + (-13 - SPAN / 2) * f, 1.6 + (13 - 1.6) * f); controls.update(); resize.done = w > 0; }
+}
+new ResizeObserver(resize).observe(view);
+
+// ---------- colour scales ----------
+const lerpColor = (a, b, t) => a.clone().lerp(b, Math.max(0, Math.min(1, t)));
+function seqColor(t) {
+  const c0 = new THREE.Color(css('--neutral-member')), c1 = new THREE.Color(css('--ctrl')), c2 = new THREE.Color(css('--tension'));
+  return t < 0.5 ? lerpColor(c0, c1, t * 2) : lerpColor(c1, c2, (t - 0.5) * 2);
+}
+function divColor(t) {
+  const mid = new THREE.Color(css('--neutral-member'));
+  return t < 0 ? lerpColor(mid, new THREE.Color(css('--compress')), -t) : lerpColor(mid, new THREE.Color(css('--tension')), t);
+}
+
+// ---------- drawing ----------
+const up = new THREE.Vector3(0, 1, 0), vA = new THREE.Vector3(), vB = new THREE.Vector3(), dir = new THREE.Vector3(), mid = new THREE.Vector3();
+const q = new THREE.Quaternion(), sc = new THREE.Vector3(), mtx = new THREE.Matrix4();
+function displayScale(r) {
+  if ($('autoScale').checked) {
+    const s = r.maxDisp > 0 ? Math.max(1, Math.round(0.6 / r.maxDisp)) : 1;
+    $('scale').value = Math.min(500, s); $('scaleVal').textContent = '×' + s; return s;
+  }
+  const s = +$('scale').value; $('scaleVal').textContent = '×' + s; return s;
+}
+function fmt(v, sig = 4) {
+  if (!Number.isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1e5 || a < 1e-3) return v.toExponential(2);
+  return v.toPrecision(sig);
+}
+function drawMembers() {
+  const r = state.result, g = r.geom, X = g.X, u = r.disp, s = displayScale(r);
+  const rad = 0.05, mode = $('colorMode').value;
+  let maxN = 0; for (let k = 0; k < r.axial.length; k++) maxN = Math.max(maxN, Math.abs(r.axial[k]));
+  const eTop = Math.max(...r.energy) || 1;
+  const gp = ghostGeo.attributes.position.array;
+  g.elems.forEach(([a, b], k) => {
+    vA.set(X[3*a] + s*u[3*a], X[3*a+1] + s*u[3*a+1], X[3*a+2] + s*u[3*a+2]);
+    vB.set(X[3*b] + s*u[3*b], X[3*b+1] + s*u[3*b+1], X[3*b+2] + s*u[3*b+2]);
+    dir.subVectors(vB, vA); const len = dir.length(); dir.normalize();
+    q.setFromUnitVectors(up, dir); mid.addVectors(vA, vB).multiplyScalar(0.5); sc.set(rad, len, rad);
+    mtx.compose(mid, q, sc); members.setMatrixAt(k, mtx);
+    let col;
+    if (mode === 'energy') col = seqColor(Math.sqrt(r.energy[k] / eTop));
+    else if (mode === 'axial') col = divColor(maxN > 0 ? r.axial[k] / maxN : 0);
+    else col = new THREE.Color(css('--neutral-member'));
+    members.setColorAt(k, col);
+    gp.set([X[3*a], X[3*a+1], X[3*a+2], X[3*b], X[3*b+1], X[3*b+2]], k * 6);
+  });
+  members.instanceMatrix.needsUpdate = true; members.instanceColor.needsUpdate = true;
+  ghostGeo.attributes.position.needsUpdate = true; ghostGeo.computeBoundingSphere();
+  ghost.visible = $('showGhost').checked;
+  g.supports.forEach((id, k) => supports[k].position.set(X[3*id], X[3*id+1], X[3*id+2] - 0.12));
+  for (let id = 0; id < g.nNodes; id++) {
+    mtx.makeTranslation(X[3*id] + s*u[3*id], X[3*id+1] + s*u[3*id+1], X[3*id+2] + s*u[3*id+2]);
+    nodeMarks.setMatrixAt(id, mtx);
+  }
+  nodeMarks.instanceMatrix.needsUpdate = true;
+  nodeMarks.visible = state.joint === 'reciprocal';
+  const L = $('legend');
+  if (mode === 'none') { L.hidden = true; return; }
+  L.hidden = false;
+  L.innerHTML = mode === 'energy'
+    ? `部材ひずみエネルギー<div class="bar" style="background:linear-gradient(90deg,${css('--neutral-member')},${css('--ctrl')},${css('--tension')})"></div><div class="ends"><span>0</span><span>${fmt(eTop / 1000, 3)} kN·m</span></div>`
+    : `軸力（引張 + ／ 圧縮 −）<div class="bar" style="background:linear-gradient(90deg,${css('--compress')},${css('--neutral-member')},${css('--tension')})"></div><div class="ends"><span>−${fmt(maxN / 1000, 3)}</span><span>0</span><span>+${fmt(maxN / 1000, 3)} kN</span></div>`;
+}
+function drawCtrl() {
+  const c = FEM.expandSym(state.z5), pos = i => (i / 4) * SPAN;
+  for (let ci = 0; ci < 25; ci++) { mtx.makeTranslation(pos(ci % 5), pos(Math.floor(ci / 5)), c[ci]); ctrlMesh.setMatrixAt(ci, mtx); }
+  ctrlMesh.instanceMatrix.needsUpdate = true;
+  const np = netGeo.attributes.position.array; let p = 0;
+  for (let j = 0; j < 5; j++) for (let i = 0; i < 4; i++) { np.set([pos(i), pos(j), c[j*5+i], pos(i+1), pos(j), c[j*5+i+1]], p); p += 6; }
+  for (let i = 0; i < 5; i++) for (let j = 0; j < 4; j++) { np.set([pos(i), pos(j), c[j*5+i], pos(i), pos(j+1), c[(j+1)*5+i]], p); p += 6; }
+  netGeo.attributes.position.needsUpdate = true; netLines.computeLineDistances();
+  const sp = stemGeo.attributes.position.array;
+  for (let ci = 0; ci < 25; ci++) sp.set([pos(ci % 5), pos(Math.floor(ci / 5)), 0, pos(ci % 5), pos(Math.floor(ci / 5)), c[ci]], ci * 6);
+  stemGeo.attributes.position.needsUpdate = true;
+  ctrlMesh.visible = netLines.visible = stems.visible = $('showNet').checked;
+}
+
+// ---------- analysis ----------
+let pending = false;
+function onShapeChange() {
+  syncInputs();
+  if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; runMain(); }); }
+}
+function runMain() {
+  drawCtrl();
+  try {
+    const r = FEM.analyze(params());
+    state.result = r; $('err').hidden = true;
+    $('roC').innerHTML = `${fmt(r.C / 1000)}<small>kN·m</small>`;
+    $('roD').innerHTML = `${fmt(r.maxDisp * 1000, 3)}<small>mm</small>`;
+    const over = r.volume > VMAX * 1.001;
+    $('roVbox').classList.toggle('over', over);
+    $('roVk').textContent = `部材体積（上限 ${VMAX}）${over ? '　超過' : ''}`;
+    $('roV').innerHTML = `${r.volume.toFixed(3)}<small>m³</small>`;
+    const oj = otherJoint(state.joint);
+    try {
+      const ro = FEM.analyze(params(oj));
+      $('roCmpK').textContent = `${JOINT_NAME[oj]}のC（比）`;
+      $('roCmp').innerHTML = `${fmt(ro.C / 1000)}<small>×${(r.C / ro.C).toFixed(2)}</small>`;
+    } catch (e) { $('roCmp').textContent = '–'; }
+    markOptimum();
+    drawMembers();
+  } catch (e) { $('err').textContent = e.message; $('err').hidden = false; }
+}
+
+// ---------- drag control points ----------
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let drag = null;
+function pick(ev) {
+  if (!$('showNet').checked) return null;
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObject(ctrlMesh);
+  return hit.length ? hit[0].instanceId : null;
+}
+renderer.domElement.addEventListener('pointerdown', ev => {
+  if (ev.button !== 0) return;
+  const ci = pick(ev); if (ci == null) return;
+  state.sel = ci; markSelection();
+  const v = ctrlToVar(ci); if (v < 0) return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  controls.enabled = false;
+  renderer.domElement.setPointerCapture(ev.pointerId);
+  const c = FEM.expandSym(state.z5);
+  const p = new THREE.Vector3((ci % 5) / 4 * SPAN, Math.floor(ci / 5) / 4 * SPAN, c[ci]);
+  const mPerPx = 2 * camera.position.distanceTo(p) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / renderer.domElement.clientHeight;
+  drag = { v, y0: ev.clientY, z0: state.z5[v], mPerPx };
+}, { capture: true });
+renderer.domElement.addEventListener('pointermove', ev => {
+  if (drag) { setVar(drag.v, Math.round((drag.z0 - (ev.clientY - drag.y0) * drag.mPerPx) * 100) / 100); onShapeChange(); return; }
+  renderer.domElement.style.cursor = pick(ev) != null ? 'ns-resize' : '';
+});
+const endDrag = () => { if (drag) { drag = null; controls.enabled = true; } };
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+
+// ---------- wiring ----------
+$('jRigid').onclick = () => setJoint('rigid');
+$('jRec').onclick = () => setJoint('reciprocal');
+$('pOptRec').onclick = () => applyOptimum('reciprocal');
+$('pOptRig').onclick = () => applyOptimum('rigid');
+['colorMode', 'showGhost', 'autoScale'].forEach(id => $(id).addEventListener('input', () => state.result && drawMembers()));
+$('showNet').addEventListener('input', drawCtrl);
+$('scale').addEventListener('input', () => { $('autoScale').checked = false; state.result && drawMembers(); });
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); }
+buildSliders();
+resize(); applyTheme(); setJoint('reciprocal');
+loop();
+})();
+</script>
+
+</body>
+</html>
