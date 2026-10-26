@@ -47,7 +47,15 @@ body {
 .wrap { max-width: 1380px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
 h1 { font-size: 22px; margin: 0; letter-spacing: 0.02em; text-wrap: balance; }
-.sub { color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }
+.sub { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+.opt { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+.opt-k { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; line-height: 1.3; align-self: center; margin-right: 4px; }
+.opt-k small { font-family: var(--font-mono); font-size: 11px; }
+.opt-btn { font: inherit; font-size: 15px; font-weight: 500; padding: 9px 18px; border-radius: 6px; cursor: pointer;
+  border: 1.5px solid var(--accent); background: var(--panel); color: var(--accent); }
+.opt-btn:hover { background: var(--accent-soft); }
+.opt-btn[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.opt-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .readouts { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
 .ro { padding: 8px 16px; display: flex; flex-direction: column; min-width: 112px; border-right: 1px solid var(--line); }
 .ro:last-child { border-right: 0; }
@@ -119,7 +127,11 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
 <div class="wrap">
   <header>
     <div>
-      <h1>ラチスシェル形状スタジオ</h1>
+      <div class="opt" role="group" aria-label="最適形状">
+        <span class="opt-k">最適形状<br><small>V ≤ 2.5 m³</small></span>
+        <button class="opt-btn" id="pOptRec" aria-pressed="false">レシプロカル</button>
+        <button class="opt-btn" id="pOptRig" aria-pressed="false">通常ラチス</button>
+      </div>
       <p class="sub">10×10グリッド（1マス1 m・11×11節点）・ベジエ曲面 5×5制御点・四隅固定・通常ラチス／レシプロカル・3次元骨組FEM（ブラウザ内で計算）</p>
     </div>
     <div class="readouts" aria-live="polite">
@@ -161,10 +173,6 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
           <button class="btn" id="pFlat">平板</button>
           <button class="btn" id="pVault">ヴォールト</button>
           <button class="btn" id="pSaddle">鞍形</button>
-        </div>
-        <div class="row">
-          <button class="btn" id="pOptRec">最適形状：レシプロカル</button>
-          <button class="btn" id="pOptRig">最適形状：通常ラチス</button>
         </div>
         <p class="note" id="modeNote"></p>
       </section>
@@ -826,6 +834,7 @@ function runMain() {
     $('roP').innerHTML = `${fmt(r.totalLoad / 1000, 4)}<small>kN</small>`;
     let h = 0; for (let i = 2; i < r.geom.X.length; i += 3) h = Math.max(h, r.geom.X[i]);
     $('roH').innerHTML = `${fmt(h, 3)}<small>m</small>`;
+    if (typeof markOptimum === 'function') markOptimum();
     const oj = otherJoint(state.joint);
     try {
       const ro = FEM.analyze({ ...params(), joint: oj });
@@ -1054,6 +1063,12 @@ function applyOptimum(joint) {
   if (state.mode !== 'sym') setMode('sym');
   state.z5 = OPT_SHAPES[joint].slice();
   setJoint(joint);
+}
+function markOptimum() {
+  for (const [j, id] of [['reciprocal', 'pOptRec'], ['rigid', 'pOptRig']]) {
+    const on = state.mode === 'sym' && state.joint === j && OPT_SHAPES[j].every((v, k) => Math.abs(v - state.z5[k]) < 1e-9);
+    $(id).setAttribute('aria-pressed', on);
+  }
 }
 $('pOptRec').onclick = () => applyOptimum('reciprocal');
 $('pOptRig').onclick = () => applyOptimum('rigid');
