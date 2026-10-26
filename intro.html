@@ -478,7 +478,7 @@ function setJoint(j) {
   state.joint = j;
   $('jRigid').setAttribute('aria-pressed', j === 'rigid'); $('jRec').setAttribute('aria-pressed', j === 'reciprocal');
   $('jointNote').textContent = j === 'reciprocal'
-    ? '交差部で並進のみを共有し、x方向部材とy方向部材の回転は独立（回転解放）。黒い輪が回転解放点。'
+    ? '交差部で並進のみを共有し、x方向部材とy方向部材の回転は独立（回転解放）。'
     : '交差部で並進・回転の6自由度すべてを共有する剛接合。';
   onShapeChange();
 }
