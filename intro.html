@@ -55,6 +55,11 @@ h1 { font-size: 22px; margin: 0; letter-spacing: 0.02em; text-wrap: balance; }
   border: 1.5px solid var(--accent); background: var(--panel); color: var(--accent); }
 .opt-btn:hover { background: var(--accent-soft); }
 .opt-btn[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.optcard { border-color: var(--accent); }
+.optgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.optcard .opt-k { margin: 0; align-self: stretch; }
+#jointNote { margin: 0 0 0 6px; align-self: center; max-width: 30ch; font-size: 12px; line-height: 1.45; color: var(--muted); }
+@media (max-width: 520px) { #jointNote { margin: 0; max-width: none; flex-basis: 100%; } }
 .opt-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .readouts { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; }
 .ro { padding: 8px 16px; display: flex; flex-direction: column; min-width: 112px; border-right: 1px solid var(--line); }
@@ -128,10 +133,11 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
 <div class="wrap">
   <header>
     <div>
-      <div class="opt" role="group" aria-label="最適形状">
-        <span class="opt-k">最適形状<small>体積制約 V ≤ 2.5 m³</small></span>
-        <button class="opt-btn" id="pOptRec" aria-pressed="false">レシプロカル</button>
-        <button class="opt-btn" id="pOptRig" aria-pressed="false">通常ラチス</button>
+      <div class="opt" role="group" aria-label="構造モデル">
+        <span class="opt-k">構造モデル</span>
+        <button class="opt-btn" id="jRec" aria-pressed="true">レシプロカル</button>
+        <button class="opt-btn" id="jRigid" aria-pressed="false">通常ラチス</button>
+        <p id="jointNote"></p>
       </div>
       <p class="sub">10 m × 10 m（10×10グリッド）・四隅固定・各節点 1 kN 鉛直荷重・角形断面 100×100 mm・E = 2.1×10⁸ kN/m²</p>
     </div>
@@ -151,13 +157,12 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
     </div>
 
     <div class="rail">
-      <section class="card">
-        <h2>構造モデル</h2>
-        <div class="seg" role="group" aria-label="構造モデル">
-          <button id="jRigid" aria-pressed="false">通常ラチス</button>
-          <button id="jRec" aria-pressed="true">レシプロカル</button>
+      <section class="card optcard" role="group" aria-label="最適形状">
+        <div class="opt-k">最適形状<small>体積制約 V ≤ 2.5 m³ のもとでCを最小化した形状</small></div>
+        <div class="optgrid">
+          <button class="opt-btn" id="pOptRec" aria-pressed="false">レシプロカル</button>
+          <button class="opt-btn" id="pOptRig" aria-pressed="false">通常ラチス</button>
         </div>
-        <p class="note" id="jointNote"></p>
       </section>
 
       <section class="card">
