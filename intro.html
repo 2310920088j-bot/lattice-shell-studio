@@ -219,20 +219,22 @@ input:disabled { opacity: 0.5; }
       </section>
 
 
-      <section class="card">
-        <h2>表示</h2>
-        <div class="field"><span>部材の色</span>
-          <select id="colorMode">
-            <option value="energy">ひずみエネルギー</option>
-            <option value="axial">軸力</option>
-            <option value="none">単色</option>
-          </select>
+      <details class="card" id="viewBox">
+        <summary>表示</summary>
+        <div class="dset">
+          <div class="field"><span>部材の色</span>
+            <select id="colorMode">
+              <option value="energy">ひずみエネルギー</option>
+              <option value="axial">軸力</option>
+              <option value="none">単色</option>
+            </select>
+          </div>
+          <label class="check"><input type="checkbox" id="autoScale" checked> 変形倍率を自動</label>
+          <div class="slider"><label for="scale">×</label><input type="range" id="scale" min="0" max="500" step="1" value="50"><span id="scaleVal" style="font-family:var(--font-mono);font-size:12px">×50</span></div>
+          <label class="check"><input type="checkbox" id="showNet" checked> 制御点ネットを表示</label>
+          <label class="check"><input type="checkbox" id="showGhost" checked> 変形前形状を表示</label>
         </div>
-        <label class="check"><input type="checkbox" id="autoScale" checked> 変形倍率を自動</label>
-        <div class="slider"><label for="scale">×</label><input type="range" id="scale" min="0" max="500" step="1" value="50"><span id="scaleVal" style="font-family:var(--font-mono);font-size:12px">×50</span></div>
-        <label class="check"><input type="checkbox" id="showNet" checked> 制御点ネットを表示</label>
-        <label class="check"><input type="checkbox" id="showGhost" checked> 変形前形状を表示</label>
-      </section>
+      </details>
 
       <details class="card" id="detailBox">
         <summary>詳細設定<span class="badge" id="condBadge">研究条件</span></summary>
