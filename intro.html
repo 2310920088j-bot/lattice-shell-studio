@@ -110,6 +110,8 @@ input[type=number], select { width: 100%; font-family: var(--font-mono); font-si
 .check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .note { font-size: 11.5px; color: var(--muted); margin: 0; }
 .note.err-note { color: var(--tension); }
+.sphere-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 10px; }
+.sphere-row input { width: 64px; }
 .optrun .row { gap: 8px; }
 .opt-btn.run { font-size: 15px; padding: 9px 16px; }
 .sub-toggle { border-top: 1px solid var(--line); padding-top: 8px; }
@@ -177,7 +179,7 @@ input:disabled { opacity: 0.5; }
     <div class="readouts" aria-live="polite">
       <div class="ro main"><span class="k">コンプライアンス C = ½fᵀu</span><span class="v" id="roC">–</span></div>
       <div class="ro"><span class="k" id="roCmpK">比較</span><span class="v" id="roCmp">–</span></div>
-      <div class="ro" id="roVbox"><span class="k" id="roVk">部材体積</span><span class="v" id="roV">–</span></div>
+      <div class="ro" id="roVbox"><span class="k" id="roVk">総長比 α</span><span class="v" id="roV">–</span></div>
       <div class="ro"><span class="k">最大変位</span><span class="v" id="roD">–</span></div>
     </div>
   </header>
@@ -201,13 +203,14 @@ input:disabled { opacity: 0.5; }
           <summary>設定・収束履歴</summary>
           <div class="sub-body">
             <label class="check"><input type="checkbox" id="useVcon" checked> 体積制約を考慮する</label>
-            <div class="field"><span>体積上限 <small>m³</small></span><input type="number" id="Vmax" value="2.5" step="0.1" min="0"></div>
+            <div class="field"><span>総長比の上限 α</span><input type="number" id="alphaMax" value="1.10" step="0.01" min="1"></div>
+            <p class="note">α = L / L₀：部材総長 L と平面（z = 0）の部材総長 L₀ = 220 m の比。断面積が一定なので V ≤ α·A·L₀ と同じ意味です。</p>
             <div class="field"><span>z の下限 <small>m</small></span><input type="number" id="zLo" value="0" step="0.5"></div>
             <div class="field"><span>z の上限 <small>m</small></span><input type="number" id="zHi" value="8" step="0.5"></div>
             <p class="note err-note" id="zBoundErr" hidden>下限は上限より小さい値にしてください。</p>
-            <div class="mini-legend"><span><i style="border-color:var(--accent)"></i>C [kN·m]（左軸）</span><span><i style="border-color:var(--ctrl)"></i>V [m³]（右軸）</span></div>
+            <div class="mini-legend"><span><i style="border-color:var(--accent)"></i>C [kN·m]（左軸）</span><span><i style="border-color:var(--ctrl)"></i>α（右軸）</span></div>
             <div class="chart mini"><canvas id="optChart"></canvas></div>
-            <p class="note">今の形状を初期値として、L-BFGS-B（差分勾配 ε = 10⁻⁴）＋拡張ラグランジュ法で C を最小化します。設定は研究コード（recopt.py）と同じです。z の範囲はスライダーの範囲にも反映されます。</p>
+            <p class="note">今の形状を初期値として、SLSQP（逐次二次計画法：最大反復 200 回、収束許容値 ftol = 10⁻⁹、差分勾配 ε = 10⁻⁴）で C を最小化します。体積は不等式制約 V ≤ α·A·L₀ として扱います（研究コードの V̄ − V ≥ 0 と同じ形）。設定は研究コード（slqprec.py）と同じです。z の範囲はスライダーの範囲にも反映されます。</p>
           </div>
         </details>
       </section>
@@ -216,6 +219,13 @@ input:disabled { opacity: 0.5; }
         <h2>形状変数（ベジエ制御点の高さ）</h2>
         <div id="symSliders" style="display:flex;flex-direction:column;gap:10px"></div>
         <p class="note">5×5の制御点を二軸＋対角の対称で5変数にまとめています。四隅は支点（z = 0）。</p>
+        <div class="sphere-row">
+          <button class="btn" id="sphereBtn" type="button">初期形状：裁断球殻</button>
+          <label for="sphereH">ライズ h</label>
+          <input type="number" id="sphereH" value="3" step="0.5" min="0.5" max="6">
+          <span>m</span>
+        </div>
+        <p class="note" id="sphereNote"></p>
       </section>
 
 
@@ -488,61 +498,22 @@ const FEM = (() => {
 })();
 </script>
 <script id="opt-src">
-// ===== L-BFGS-B (bound-constrained limited-memory BFGS) =====
-// Follows Byrd, Lu, Nocedal & Zhu (1995) / L-BFGS-B v3.0 as used by scipy.optimize.minimize(method='L-BFGS-B'):
-//   generalized Cauchy point -> subspace minimisation (with projection, v3.0) -> More-Thuente line search.
-// For small n the limited-memory matrix B is formed explicitly by recursive BFGS updates from theta*I,
-// which is mathematically identical to the compact representation used in the Fortran code.
-// Generator-based so that a page can run it in small time slices (yield after every objective evaluation).
-// Gradient: forward differences with absolute step eps, flipped to backward at an upper bound
-// (scipy approx_derivative '2-point' with bounds).
-const LBFGSB = (() => {
-  const EPSMCH = 2.220446049250313e-16;
-
-  function* fdGrad(fun, x, f0, eps, lb, ub) {
-    const n = x.length, g = new Array(n);
-    for (let i = 0; i < n; i++) {
-      let h = eps;
-      const lower = x[i] - lb[i], upper = ub[i] - x[i];
-      const xt = x[i] + h;
-      const violated = xt < lb[i] || xt > ub[i];
-      const fitting = Math.abs(h) <= Math.max(lower, upper);
-      if (violated && fitting) h = -h;
-      else if (!fitting) h = upper >= lower ? upper : -lower;
-      const xp = x.slice(); xp[i] = x[i] + h;
-      const dx = xp[i] - x[i];
-      g[i] = ((yield* fun(xp)) - f0) / dx;
-    }
-    return g;
-  }
-
-  function projGradNorm(x, g, lb, ub) {
-    let s = 0;
-    for (let i = 0; i < x.length; i++) {
-      let gi = g[i];
-      if (gi < 0) gi = Math.max(x[i] - ub[i], gi); else gi = Math.min(x[i] - lb[i], gi);
-      s = Math.max(s, Math.abs(gi));
-    }
-    return s;
-  }
-
+// ===== SLSQP (Kraft 1988), as used by scipy.optimize.minimize(method='SLSQP') =====
+// Main loop follows Kraft's slsqpb: QP sub-problem -> L1 merit line search (Armijo, alpha >= 0.1, <= 10 steps)
+// -> damped BFGS update (Powell). The QP sub-problem  min 1/2 d'Bd + g'd  s.t.  A d >= -c,  xl-x <= d <= xu-x
+// has a unique solution when B is positive definite; for the small problems here it is solved exactly by
+// enumerating active sets (Kraft solves the same problem with LSEI/LDP/NNLS).
+// Generator: yields after every objective evaluation so a page can run it in time slices.
+const SLSQP = (() => {
   const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
   const matvec = (B, v) => B.map(row => dot(row, v));
+  const norm = v => Math.sqrt(dot(v, v));
 
-  function buildB(pairs, theta, n) {
-    let B = [];
-    for (let i = 0; i < n; i++) { B.push(new Array(n).fill(0)); B[i][i] = theta; }
-    for (const { s, y } of pairs) {
-      const Bs = matvec(B, s), sBs = dot(s, Bs), ys = dot(y, s);
-      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) B[i][j] += -Bs[i] * Bs[j] / sBs + y[i] * y[j] / ys;
-    }
-    return B;
-  }
-
-  function solve(A, b) { // Gaussian elimination with partial pivoting (small dense)
+  function solveDense(A, b) { // Gaussian elimination with partial pivoting; returns null if singular
     const n = b.length, M = A.map((r, i) => [...r, b[i]]);
     for (let c = 0; c < n; c++) {
       let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+      if (Math.abs(M[p][c]) < 1e-14) return null;
       [M[c], M[p]] = [M[p], M[c]];
       for (let r = c + 1; r < n; r++) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
     }
@@ -551,266 +522,191 @@ const LBFGSB = (() => {
     return x;
   }
 
-  // Generalized Cauchy point along the projected steepest-descent path of the quadratic model.
-  function cauchy(x, g, lb, ub, B) {
-    const n = x.length;
-    const d = new Array(n).fill(0), tb = new Array(n).fill(Infinity), where = new Array(n).fill(0);
+  // min 1/2 d'Bd + g'd  s.t.  A[j] d >= b[j] (j<m),  lo <= d <= hi.  Exact active-set enumeration.
+  function qp(B, g, A, b, lo, hi) {
+    const n = g.length, m = A.length;
+    const scale = Math.max(1, ...g.map(Math.abs), ...B.flat().map(Math.abs));
+    const tolP = 1e-10 * Math.max(1, ...b.map(Math.abs), ...lo.filter(Number.isFinite).map(Math.abs), ...hi.filter(Number.isFinite).map(Math.abs));
+    const tolD = 1e-10 * scale;
+    let best = null;
+    const states = new Array(n).fill(0);
+    const nState = 3 ** n;
+    for (let code = 0; code < nState; code++) {
+      let c = code, okb = true;
+      for (let i = 0; i < n; i++) { states[i] = c % 3; c = Math.floor(c / 3); if ((states[i] === 1 && !Number.isFinite(lo[i])) || (states[i] === 2 && !Number.isFinite(hi[i]))) okb = false; }
+      if (!okb) continue;
+      const free = [], dfix = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) { if (states[i] === 0) free.push(i); else dfix[i] = states[i] === 1 ? lo[i] : hi[i]; }
+      for (let mask = 0; mask < (1 << m); mask++) {
+        const act = []; for (let j = 0; j < m; j++) if (mask & (1 << j)) act.push(j);
+        if (act.length > free.length) continue;
+        const nf = free.length, na = act.length, K = [], rhs = [];
+        for (let a = 0; a < nf; a++) {
+          const i = free[a], row = new Array(nf + na).fill(0);
+          for (let q = 0; q < nf; q++) row[q] = B[i][free[q]];
+          for (let q = 0; q < na; q++) row[nf + q] = -A[act[q]][i];
+          let r = -g[i]; for (let k = 0; k < n; k++) if (states[k] !== 0) r -= B[i][k] * dfix[k];
+          K.push(row); rhs.push(r);
+        }
+        for (let q = 0; q < na; q++) {
+          const j = act[q], row = new Array(nf + na).fill(0);
+          for (let a = 0; a < nf; a++) row[a] = A[j][free[a]];
+          let r = b[j]; for (let k = 0; k < n; k++) if (states[k] !== 0) r -= A[j][k] * dfix[k];
+          K.push(row); rhs.push(r);
+        }
+        let sol = nf + na ? solveDense(K, rhs) : [];
+        if (!sol) continue;
+        const d = dfix.slice(); free.forEach((i, a) => { d[i] = sol[a]; });
+        const lam = new Array(m).fill(0); act.forEach((j, q) => { lam[j] = sol[nf + q]; });
+        // primal feasibility
+        let ok = true;
+        for (const i of free) if (d[i] < lo[i] - tolP || d[i] > hi[i] + tolP) { ok = false; break; }
+        if (!ok) continue;
+        for (let j = 0; j < m && ok; j++) if (!act.includes(j) && dot(A[j], d) < b[j] - tolP) ok = false;
+        if (!ok) continue;
+        // dual feasibility
+        if (lam.some(v => v < -tolD)) continue;
+        const Bd = matvec(B, d);
+        for (let i = 0; i < n && ok; i++) if (states[i] !== 0) {
+          let mu = Bd[i] + g[i]; for (let j = 0; j < m; j++) mu -= A[j][i] * lam[j];
+          if ((states[i] === 1 && mu < -tolD) || (states[i] === 2 && mu > tolD)) ok = false;
+        }
+        if (!ok) continue;
+        const obj = 0.5 * dot(d, Bd) + dot(g, d);
+        if (!best || obj < best.obj - 1e-15 * Math.abs(obj)) best = { d, lam, obj };
+      }
+    }
+    return best;
+  }
+
+  function* fdGrad(fun, x, f0, eps, lb, ub, doYield) {
+    const n = x.length, gr = new Array(n);
     for (let i = 0; i < n; i++) {
-      const neggi = -g[i];
-      const atL = x[i] - lb[i] <= 0, atU = ub[i] - x[i] <= 0;
-      if (atL && neggi <= 0) where[i] = 1;
-      else if (atU && neggi >= 0) where[i] = 2;
-      else if (Math.abs(neggi) <= 0) where[i] = -3;
-      if (where[i] !== 0) continue;
-      d[i] = neggi;
-      if (neggi < 0) tb[i] = (x[i] - lb[i]) / -neggi;
-      else if (neggi > 0) tb[i] = (ub[i] - x[i]) / neggi;
+      let h = eps;
+      const lower = x[i] - lb[i], upper = ub[i] - x[i];
+      const xt = x[i] + h;
+      const violated = xt < lb[i] || xt > ub[i];
+      const fitting = Math.abs(h) <= Math.max(lower, upper);
+      if (violated && fitting) h = -h; else if (!fitting) h = upper >= lower ? upper : -lower;
+      const xp = x.slice(); xp[i] = x[i] + h;
+      const dx = xp[i] - x[i];
+      const fp = fun(xp); if (doYield) yield;
+      gr[i] = Array.isArray(f0) ? fp.map((v, k) => (v - f0[k]) / dx) : (fp - f0) / dx;
     }
-    const xcp = x.slice();
-    if (d.every(v => v === 0)) return { xcp, where };
-    const z = new Array(n).fill(0); // xcp - x
-    const order = [...Array(n).keys()].filter(i => d[i] !== 0 && Number.isFinite(tb[i])).sort((a, b) => tb[a] - tb[b]);
-    let told = 0, k = 0;
-    while (true) {
-      const Bz = matvec(B, z), Bd = matvec(B, d);
-      const f1 = dot(g, d) + dot(d, Bz);
-      const f2 = dot(d, Bd);
-      const dtm = f2 > 0 ? -f1 / f2 : Infinity;
-      const tnext = k < order.length ? tb[order[k]] : Infinity;
-      if (f1 >= 0) break;
-      if (dtm < tnext - told) {
-        const dt = Math.max(dtm, 0);
-        for (let i = 0; i < n; i++) if (d[i] !== 0) z[i] += dt * d[i];
-        break;
-      }
-      const dt = tnext - told;
-      for (let i = 0; i < n; i++) if (d[i] !== 0) z[i] += dt * d[i];
-      // fix every variable whose breakpoint is reached now
-      while (k < order.length && tb[order[k]] <= tnext) {
-        const b = order[k];
-        z[b] = (d[b] > 0 ? ub[b] : lb[b]) - x[b];
-        where[b] = d[b] > 0 ? 2 : 1;
-        d[b] = 0; k++;
-      }
-      told = tnext;
-      if (d.every(v => v === 0)) break;
-    }
-    for (let i = 0; i < n; i++) xcp[i] = where[i] === 1 ? lb[i] : where[i] === 2 ? ub[i] : x[i] + z[i];
-    return { xcp, where };
+    return gr; // for vector functions: gr[i][k] = d c_k / d x_i
   }
 
-  // Subspace minimisation over free variables at the Cauchy point (v3.0: project, else backtrack).
-  function subspace(x, g, lb, ub, B, xcp, where) {
-    const n = x.length;
-    const free = [...Array(n).keys()].filter(i => where[i] <= 0);
-    if (!free.length) return xcp.slice();
-    const z = xcp.map((v, i) => v - x[i]);
-    const Bz = matvec(B, z);
-    const r = free.map(i => -(g[i] + Bz[i]));
-    const BFF = free.map(i => free.map(j => B[i][j]));
-    const du = solve(BFF, r);
-    const xbar = xcp.slice();
-    free.forEach((i, k) => { xbar[i] = Math.min(ub[i], Math.max(lb[i], xcp[i] + du[k])); });
-    let ddp = 0; for (let i = 0; i < n; i++) ddp += (xbar[i] - x[i]) * g[i];
-    if (ddp <= 0) return xbar;
-    // backtracking: largest alpha<=1 keeping xcp + alpha*du feasible
-    let alpha = 1, ibd = -1;
-    free.forEach((i, k) => {
-      const dk = du[k]; let t = alpha;
-      if (dk < 0) { const t2 = lb[i] - xcp[i]; if (t2 >= 0) t = 0; else if (dk * alpha < t2) t = t2 / dk; }
-      else if (dk > 0) { const t2 = ub[i] - xcp[i]; if (t2 <= 0) t = 0; else if (dk * alpha > t2) t = t2 / dk; }
-      if (t < alpha) { alpha = t; ibd = k; }
-    });
-    const out = xcp.slice();
-    free.forEach((i, k) => { out[i] = xcp[i] + alpha * du[k]; });
-    if (alpha < 1 && ibd >= 0) { const i = free[ibd]; out[i] = du[ibd] > 0 ? ub[i] : lb[i]; }
-    return out;
-  }
-
-  // More-Thuente step (MINPACK-2 dcstep)
-  function dcstep(s) {
-    let { stx, fx, dx, sty, fy, dy, stp, fp, dp, brackt, stpmin, stpmax } = s;
-    const sgnd = dp * (dx / Math.abs(dx));
-    let stpf;
-    if (fp > fx) {
-      const theta = 3 * (fx - fp) / (stp - stx) + dx + dp;
-      const sm = Math.max(Math.abs(theta), Math.abs(dx), Math.abs(dp));
-      let gamma = sm * Math.sqrt((theta / sm) ** 2 - (dx / sm) * (dp / sm)); if (stp < stx) gamma = -gamma;
-      const p = (gamma - dx) + theta, q = ((gamma - dx) + gamma) + dp, r = p / q;
-      const stpc = stx + r * (stp - stx);
-      const stpq = stx + ((dx / ((fx - fp) / (stp - stx) + dx)) / 2) * (stp - stx);
-      stpf = Math.abs(stpc - stx) < Math.abs(stpq - stx) ? stpc : stpc + (stpq - stpc) / 2;
-      brackt = true;
-    } else if (sgnd < 0) {
-      const theta = 3 * (fx - fp) / (stp - stx) + dx + dp;
-      const sm = Math.max(Math.abs(theta), Math.abs(dx), Math.abs(dp));
-      let gamma = sm * Math.sqrt((theta / sm) ** 2 - (dx / sm) * (dp / sm)); if (stp > stx) gamma = -gamma;
-      const p = (gamma - dp) + theta, q = ((gamma - dp) + gamma) + dx, r = p / q;
-      const stpc = stp + r * (stx - stp), stpq = stp + (dp / (dp - dx)) * (stx - stp);
-      stpf = Math.abs(stpc - stp) > Math.abs(stpq - stp) ? stpc : stpq;
-      brackt = true;
-    } else if (Math.abs(dp) < Math.abs(dx)) {
-      const theta = 3 * (fx - fp) / (stp - stx) + dx + dp;
-      const sm = Math.max(Math.abs(theta), Math.abs(dx), Math.abs(dp));
-      let gamma = sm * Math.sqrt(Math.max(0, (theta / sm) ** 2 - (dx / sm) * (dp / sm))); if (stp > stx) gamma = -gamma;
-      const p = (gamma - dp) + theta, q = (gamma + (dx - dp)) + gamma, r = p / q;
-      let stpc;
-      if (r < 0 && gamma !== 0) stpc = stp + r * (stx - stp); else if (stp > stx) stpc = stpmax; else stpc = stpmin;
-      const stpq = stp + (dp / (dp - dx)) * (stx - stp);
-      if (brackt) {
-        stpf = Math.abs(stpc - stp) < Math.abs(stpq - stp) ? stpc : stpq;
-        stpf = stp > stx ? Math.min(stp + 0.66 * (sty - stp), stpf) : Math.max(stp + 0.66 * (sty - stp), stpf);
-      } else {
-        stpf = Math.abs(stpc - stp) > Math.abs(stpq - stp) ? stpc : stpq;
-        stpf = Math.max(stpmin, Math.min(stpmax, stpf));
-      }
-    } else {
-      if (brackt) {
-        const theta = 3 * (fp - fy) / (sty - stp) + dy + dp;
-        const sm = Math.max(Math.abs(theta), Math.abs(dy), Math.abs(dp));
-        let gamma = sm * Math.sqrt((theta / sm) ** 2 - (dy / sm) * (dp / sm)); if (stp > sty) gamma = -gamma;
-        const p = (gamma - dp) + theta, q = ((gamma - dp) + gamma) + dy, r = p / q;
-        stpf = stp + r * (sty - stp);
-      } else stpf = stp > stx ? stpmax : stpmin;
-    }
-    if (fp > fx) { sty = stp; fy = fp; dy = dp; }
-    else { if (sgnd < 0) { sty = stx; fy = fx; dy = dx; } stx = stp; fx = fp; dx = dp; }
-    Object.assign(s, { stx, fx, dx, sty, fy, dy, stp: stpf, brackt });
-  }
-
-  // More-Thuente line search (MINPACK-2 dcsrch). phi(stp) -> [f, dphi]
-  function* dcsrch(phi, finit, ginit, stp, stpmin, stpmax, maxls, ftol = 1e-3, gtol = 0.9, xtol = 0.1) {
-    const xtrapl = 1.1, xtrapu = 4.0;
-    let brackt = false, stage = 1;
-    const gtest = ftol * ginit;
-    let width = stpmax - stpmin, width1 = width / 0.5;
-    let stx = 0, fx = finit, gx = ginit, sty = 0, fy = finit, gy = ginit;
-    let stmin = 0, stmax = stp + xtrapu * stp;
-    for (let nls = 1; ; nls++) {
-      const [f, g] = yield* phi(stp);
-      const ftest = finit + stp * gtest;
-      if (stage === 1 && f <= ftest && g >= 0) stage = 2;
-      if (brackt && (stp <= stmin || stp >= stmax)) return { ok: true, stp, warn: 'ROUNDING' };
-      if (brackt && stmax - stmin <= xtol * stmax) return { ok: true, stp, warn: 'XTOL' };
-      if (stp === stpmax && f <= ftest && g <= gtest) return { ok: true, stp, warn: 'STPMAX' };
-      if (stp === stpmin && (f > ftest || g >= gtest)) return { ok: true, stp, warn: 'STPMIN' };
-      if (f <= ftest && Math.abs(g) <= gtol * -ginit) return { ok: true, stp };
-      if (nls >= maxls) return { ok: false, stp };
-      const st = { stx, fx, dx: gx, sty, fy, dy: gy, stp, fp: f, dp: g, brackt, stpmin: stmin, stpmax: stmax };
-      if (stage === 1 && f <= fx && f > ftest) {
-        Object.assign(st, { fx: fx - stx * gtest, fy: fy - sty * gtest, dx: gx - gtest, dy: gy - gtest, fp: f - stp * gtest, dp: g - gtest });
-        dcstep(st);
-        st.fx += st.stx * gtest; st.fy += st.sty * gtest; st.dx += gtest; st.dy += gtest;
-      } else dcstep(st);
-      ({ stx, fx, sty, fy, brackt } = st); gx = st.dx; gy = st.dy; stp = st.stp;
-      if (brackt) {
-        if (Math.abs(sty - stx) >= 0.66 * width1) stp = stx + 0.5 * (sty - stx);
-        width1 = width; width = Math.abs(sty - stx);
-        stmin = Math.min(stx, sty); stmax = Math.max(stx, sty);
-      } else {
-        stmin = stp + xtrapl * (stp - stx); stmax = stp + xtrapu * (stp - stx);
-      }
-      stp = Math.min(Math.max(stp, stpmin), stpmax);
-      if ((brackt && (stp <= stmin || stp >= stmax)) || (brackt && stmax - stmin <= xtol * stmax)) stp = stx;
-    }
-  }
-
-  // minimize(fun, x0, lb, ub, opts) ; opts: { m, maxiter, ftol, gtol, eps, maxls, maxfun, onIter }
-  function* minimize(fun, x0, lb, ub, opts = {}) {
-    const m = opts.m ?? 10, maxiter = opts.maxiter ?? 15000, ftol = opts.ftol ?? 2.2e-9, pgtol = opts.gtol ?? 1e-5;
-    const eps = opts.eps ?? 1e-8, maxls = opts.maxls ?? 20, maxfun = opts.maxfun ?? 15000;
-    const n = x0.length;
+  // fun(x) -> f ;  cons(x) -> array c (c >= 0 required) ; returns { x, fun, nit, nfev, status, message }
+  function* minimize(fun, cons, x0, lb, ub, opts = {}) {
+    const maxiter = opts.maxiter ?? 100, acc = Math.abs(opts.ftol ?? 1e-6), eps = opts.eps ?? 1.4901161193847656e-8;
+    const tol = 10 * acc, n = x0.length;
     let nfev = 0;
     const F = function* (x) { nfev++; const v = fun(x); yield; return v; };
-    const FG = function* (x) { const f = yield* F(x); const g = yield* fdGrad(F, x, f, eps, lb, ub); return [f, g]; };
-    let x = x0.map((v, i) => Math.min(ub[i], Math.max(lb[i], v)));
-    let [f, g] = yield* FG(x);
-    let pairs = [], theta = 1, nit = 0;
-    const done = msg => ({ x, f, nit, nfev, message: msg });
-    if (projGradNorm(x, g, lb, ub) <= pgtol) return done('CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL');
-    let iterSinceReset = 0;
+    const Fsync = x => { nfev++; return fun(x); };
+    const clip = x => x.map((v, i) => Math.min(ub[i], Math.max(lb[i], v)));
+    let x = clip(x0.slice());
+    let f = yield* F(x);
+    let c = cons(x); const m = c.length;
+    const gradAt = function* (x, f, c) {
+      const g = [];
+      // objective gradient (forward differences, bounds aware)
+      const gi = fdGrad(Fsync, x, f, eps, lb, ub, true); let r; do { r = gi.next(); if (!r.done) yield; } while (!r.done); g.push(...r.value);
+      const Jt = m ? fdGrad(cons, x, c, eps, lb, ub, false).next().value : null; // Jt[i][j] = dc_j/dx_i
+      const A = []; for (let j = 0; j < m; j++) A.push(Jt.map(col => col[j]));
+      return { g, A };
+    };
+    let { g, A } = yield* gradAt(x, f, c);
+    const mu = new Array(m).fill(0);
+    let B = null, ireset = 0, iter = 0;
+    const done = (status, message) => ({ x, fun: f, nit: iter, nfev, status, message });
+    const resetB = () => { B = []; for (let i = 0; i < n; i++) { B.push(new Array(n).fill(0)); B[i][i] = 1; } };
+    const viol = cc => cc.reduce((s, v) => s + Math.max(-v, 0), 0);
+    ireset++; resetB();
     while (true) {
-      const B = buildB(pairs, theta, n);
-      const { xcp, where } = cauchy(x, g, lb, ub, B);
-      const xbar = pairs.length ? subspace(x, g, lb, ub, B, xcp, where) : xcp;
-      const d = xbar.map((v, i) => v - x[i]);
-      const gd = dot(g, d);
-      if (!(gd < 0)) {
-        if (!pairs.length) return done('ABNORMAL_TERMINATION_IN_LNSRCH');
-        pairs = []; theta = 1; continue;
+      iter++;
+      if (iter > maxiter) return done(9, 'Iteration limit reached');
+      // ---- search direction: QP sub-problem ----
+      const lo = x.map((v, i) => lb[i] - v), hi = x.map((v, i) => ub[i] - v);
+      let h4 = 1;
+      let sol = qp(B, g, A, c.map(v => -v), lo, hi);
+      let s, r;
+      if (sol) { s = sol.d; r = sol.lam; }
+      else {
+        // inconsistent linearisation: augmented problem with a dummy variable s_{n+1} in [0,1]
+        let wAug = 100, found = null;
+        for (let inc = 0; inc <= 5 && !found; inc++) {
+          const Ba = B.map(row => [...row, 0]); Ba.push([...new Array(n).fill(0), wAug]);
+          const Aa = A.map((row, j) => [...row, Math.max(-c[j], 0)]);
+          found = qp(Ba, [...g, 0], Aa, c.map(v => -v), [...lo, 0], [...hi, 1]);
+          wAug *= 10;
+        }
+        if (!found) return done(4, 'Inequality constraints incompatible');
+        s = found.d.slice(0, n); r = found.lam; h4 = 1 - found.d[n];
       }
-      // maximum feasible step
-      let stpmx = 1e10;
-      if (nit === 0) stpmx = 1;
-      else for (let i = 0; i < n; i++) {
-        if (d[i] < 0) { const a1 = lb[i] - x[i]; if (a1 >= 0) stpmx = 0; else if (a1 > d[i] * stpmx) stpmx = a1 / d[i]; }
-        else if (d[i] > 0) { const a1 = ub[i] - x[i]; if (a1 <= 0) stpmx = 0; else if (a1 < d[i] * stpmx) stpmx = a1 / d[i]; }
+      // ---- multipliers for the L1 merit function ----
+      const v = g.map((gi, i) => { let t = gi; for (let j = 0; j < m; j++) t -= A[j][i] * r[j]; return t; });
+      const f0 = f, x0c = x.slice();
+      const gs = dot(g, s);
+      let h1 = Math.abs(gs), h2 = 0;
+      for (let j = 0; j < m; j++) {
+        h2 += Math.max(-c[j], 0);
+        const h3 = Math.abs(r[j]);
+        mu[j] = Math.max(h3, (mu[j] + h3) / 2);
+        h1 += h3 * Math.abs(c[j]);
       }
-      const stp0 = 1; // all variables boxed
-      let lastF, lastG, lastX;
-      const phi = function* (s) {
-        const xs = s === 1 ? xbar.slice() : x.map((v, i) => v + s * d[i]);
-        const [fs, gs] = yield* FG(xs); lastF = fs; lastG = gs; lastX = xs;
-        return [fs, dot(gs, d)];
-      };
-      const ls = yield* dcsrch(phi, f, gd, Math.min(stp0, stpmx), 0, stpmx, maxls);
-      if (!ls.ok) {
-        if (!pairs.length) return done('ABNORMAL_TERMINATION_IN_LNSRCH');
-        pairs = []; theta = 1; continue;
+      if (h1 < acc && h2 < acc) return done(0, 'Optimization terminated successfully');
+      h1 = 0; for (let j = 0; j < m; j++) h1 += mu[j] * Math.max(-c[j], 0);
+      const t0 = f + h1;
+      let h3 = gs - h1 * h4;
+      if (h3 >= 0) {
+        ireset++;
+        if (ireset > 5) {
+          const hv = viol(c);
+          return (Math.abs(f - f0) < tol || norm(s) < tol) && hv < tol ? done(0, 'Optimization terminated successfully') : done(8, 'Positive directional derivative for linesearch');
+        }
+        resetB(); continue;
       }
-      const stp = ls.stp;
-      // dcsrch's last evaluation corresponds to the accepted step
-      const xnew = lastX, fnew = lastF, gnew = lastG;
-      const fold = f, xold = x, gold = g;
-      x = xnew; f = fnew; g = gnew; nit++;
-      if (opts.onIter) opts.onIter({ x: x.slice(), f, nit, nfev });
-      if (nit >= maxiter) return done('STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT');
-      if (nfev > maxfun) return done('STOP: TOTAL NO. OF F,G EVALUATIONS EXCEEDS LIMIT');
-      if (projGradNorm(x, g, lb, ub) <= pgtol) return done('CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL');
-      const ddum = Math.max(Math.abs(fold), Math.abs(f), 1);
-      if (fold - f <= ftol * ddum) return done('CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH');
-      const s = x.map((v, i) => v - xold[i]), y = g.map((v, i) => v - gold[i]);
-      const dr = dot(s, y), ddum2 = -gd * stp;
-      if (dr > EPSMCH * ddum2) {
-        pairs.push({ s, y }); if (pairs.length > m) pairs.shift();
-        theta = dot(y, y) / dr;
+      // ---- inexact line search with L1 test function ----
+      let line = 0, alpha = 1;
+      while (true) {
+        line++;
+        h3 = alpha * h3;
+        s = s.map(si => si * alpha);
+        x = clip(x0c.map((xi, i) => xi + s[i]));
+        f = yield* F(x); c = cons(x);
+        let t = f; for (let j = 0; j < m; j++) t += mu[j] * Math.max(-c[j], 0);
+        h1 = t - t0;
+        if (h1 <= h3 / 10 || line > 10) break;
+        alpha = Math.max(h3 / (2 * (h3 - h1)), 0.1);
       }
+      // ---- convergence check ----
+      if ((Math.abs(f - f0) < acc || norm(s) < acc) && viol(c) < acc) {
+        if (opts.onIter) opts.onIter({ x: x.slice(), f, nit: iter, nfev });
+        return done(0, 'Optimization terminated successfully');
+      }
+      ({ g, A } = yield* gradAt(x, f, c));
+      if (opts.onIter) opts.onIter({ x: x.slice(), f, nit: iter, nfev });
+      // ---- damped BFGS update of the Lagrangian Hessian ----
+      let u = g.map((gi, i) => { let t = gi; for (let j = 0; j < m; j++) t -= A[j][i] * r[j]; return t - v[i]; });
+      const Bs = matvec(B, s);
+      let sy = dot(s, u); const sBs = dot(s, Bs), lim = 0.2 * sBs;
+      if (sy < lim) { const th = (sBs - lim) / (sBs - sy); sy = lim; u = u.map((ui, i) => th * ui + (1 - th) * Bs[i]); }
+      if (sy === 0 || sBs === 0) { ireset++; if (ireset > 5) return done(8, 'Positive directional derivative for linesearch'); resetB(); continue; }
+      for (let i = 0; i < n; i++) for (let k = 0; k < n; k++) B[i][k] += u[i] * u[k] / sy - Bs[i] * Bs[k] / sBs;
     }
   }
-  // run a generator to completion synchronously (tests / workers)
   function runSync(gen) { let r; do { r = gen.next(); } while (!r.done); return r.value; }
-  return { minimize, runSync };
+  return { minimize, runSync, qp };
 })();
 
 
-// Augmented Lagrangian driver (same as recopt.py)
-function* runALM(objUV, z0, opts = {}) {
-  const o = Object.assign({ Vbar: 2.5, lam0: 0, rho0: 10, rhoMax: 1e6, gamma: 10, eta: 0.25, maxOuter: 30, tolFeas: 1e-5,
-    maxInner: 50, lb: [0,0,0,0,0], ub: [8,8,8,8,8], ftol: 1e-12, gtol: 1e-8, eps: 1e-4 }, opts);
-  let lam = o.lam0, rho = o.rho0, z = z0.slice(), gp = null, calls = 0;
-  const hist = [];
-  for (let k = 1; k <= o.maxOuter; k++) {
-    const zp = z.slice();
-    const phi = x => { calls++; const { U, V } = objUV(x); const g = V - o.Vbar; const la = Math.max(0, lam + rho * g); return U + (la * la - lam * lam) / (2 * rho); };
-    const res = yield* LBFGSB.minimize(phi, z, o.lb, o.ub, { maxiter: o.maxInner, ftol: o.ftol, gtol: o.gtol, eps: o.eps, onIter: o.onIter ? it => o.onIter({ ...it, outer: k, lam, rho }) : undefined });
-    z = res.x;
-    const dz = Math.hypot(...z.map((v, i) => v - zp[i]));
-    const { U, V } = objUV(z); const g = V - o.Vbar;
-    hist.push({ k, lam, rho, nit: res.nit, nfev: res.nfev, msg: res.message, z: z.slice(), U, V });
-    if (o.onOuter) o.onOuter(hist[hist.length - 1]);
-    // 1) λ update with the ρ used in this subproblem, 2) then ρ update judged on the violation max(g, 0)
-    lam = Math.max(0, lam + rho * g);
-    if (gp !== null && Math.max(g, 0) > o.eta * Math.max(gp, 0)) rho = Math.min(rho * o.gamma, o.rhoMax);
-    gp = g;
-    if (Math.abs(g) < o.tolFeas) return { z, U, V, hist, calls, reason: 'feas' };
-    if (lam === 0 && g < 0) return { z, U, V, hist, calls, reason: 'inactive' };
-    if (dz < 1e-6) return { z, U, V, hist, calls, reason: 'dz' };
-  }
-  const { U, V } = objUV(z);
-  return { z, U, V, hist, calls, reason: 'maxouter' };
+// member volume V(z) from geometry only (no analysis)
+function makeVolFn(p) {
+  const A = p.A ?? FEM.section(p).A;
+  return z => { const g = FEM.buildGeometry(p.n, p.L, FEM.expandSym(z)), X = g.X; let L = 0;
+    for (const [a, b] of g.elems) L += Math.hypot(X[3*b] - X[3*a], X[3*b+1] - X[3*a+1], X[3*b+2] - X[3*a+2]);
+    return L * A; };
 }
-
-
 </script>
 <script>
 (() => {
@@ -823,7 +719,8 @@ const FIXED = {
   shape: 'square', solid: true, D: 0.1, t: 0.05, rho: 0,
   P: 1000, useP: true, useSW: false,              // 1 kN / node
 };
-let VMAX = 2.5;
+let VMAX = 2.5, ALPHA_MAX = 1.10;
+const L0 = 2 * N_CELL * (N_CELL + 1) * CELL; // flat total member length (220 m)
 const RESEARCH = { shape: 'square', D: 100, solid: true, t: 6, E: 210000, nu: 0.3, useP: true, P: 1.0, useSW: false, rho: 7850 };
 let secShape = 'square';
 const ORBIT_INFO = [
@@ -844,7 +741,7 @@ const css = name => getComputedStyle(document.documentElement).getPropertyValue(
 function readCond() {
   const num = (id, d) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : d; };
   return { shape: secShape, D: num('D', 100), solid: $('solid').checked, t: num('t', 6), E: num('E', 210000) * 1000, nu: num('nu', 0.3),
-    useP: $('useP').checked, P: num('P', 1), useSW: $('useSW').checked, rho: num('rho', 7850), Vmax: num('Vmax', 2.5) };
+    useP: $('useP').checked, P: num('P', 1), useSW: $('useSW').checked, rho: num('rho', 7850), alphaMax: num('alphaMax', 1.10) };
 }
 function isResearch(c) {
   c = { ...c, E: c.E / 1000 };
@@ -909,7 +806,8 @@ function fmtE(v) { const e = Math.floor(Math.log10(v)), m = v / 10 ** e; const s
 function updateCond() {
   const c = readCond();
   $('t').disabled = c.solid;
-  VMAX = c.Vmax > 0 ? c.Vmax : 2.5;
+  ALPHA_MAX = c.alphaMax > 0 ? c.alphaMax : 1.10;
+  { const pp = params(); VMAX = ALPHA_MAX * (pp.A ?? FEM.section(pp).A) * L0; }
   const p = params(), s = p.A != null ? { A: p.A, I: p.I, J: p.J } : FEM.section(p);
   const secName = (c.shape === 'square' ? '角形' : '丸形') + (c.solid ? '（中実）' : '鋼管');
   $('secInfo').textContent = `${secName}　A = ${(s.A * 1e4).toFixed(2)} cm²　I = ${(s.I * 1e8).toFixed(1)} cm⁴　J = ${(s.J * 1e8).toFixed(1)} cm⁴`;
@@ -1111,10 +1009,11 @@ function runMain() {
     state.result = r; $('err').hidden = true;
     $('roC').innerHTML = `${fmt(r.C / 1000)}<small>kN·m</small>`;
     $('roD').innerHTML = `${fmt(r.maxDisp * 1000, 3)}<small>mm</small>`;
-    const over = r.volume > VMAX * 1.001;
+    const alpha = r.totalLen / L0;
+    const over = alpha > ALPHA_MAX * 1.001;
     $('roVbox').classList.toggle('over', over);
-    $('roVk').textContent = `部材体積（上限 ${VMAX}）${over ? '　超過' : ''}`;
-    $('roV').innerHTML = `${r.volume.toFixed(3)}<small>m³</small>`;
+    $('roVk').textContent = `総長比 α（上限 ${ALPHA_MAX.toFixed(2)}）${over ? '　超過' : ''}`;
+    $('roV').innerHTML = `${alpha.toFixed(4)}`;
     const oj = otherJoint(state.joint);
     if (optRunning) { $('roCmp').textContent = '–'; } else try {
       const ro = FEM.analyze(params(oj));
@@ -1169,21 +1068,21 @@ self.onmessage = (e) => {
   const objUV = z => { const r = FEM.analyze({ ...p, ctrl: FEM.expandSym(z) }); return { U: r.C / 1000, V: r.volume }; };
   const counted = z => { calls++; return objUV(z); };
   const t0 = Date.now();
-  const onIter = it => { const uv = objUV(it.x); self.postMessage({ type: 'iter', x: it.x, U: uv.U, V: uv.V, outer: it.outer || 1, nit: it.nit, lam: it.lam, rho: it.rho, calls, t: (Date.now() - t0) / 1000 }); };
+  const volOf = makeVolFn(p);
+  const onIter = it => { const uv = objUV(it.x); self.postMessage({ type: 'iter', x: it.x, U: uv.U, V: uv.V, nit: it.nit, calls, t: (Date.now() - t0) / 1000 }); };
   try {
-    const gen = useV ? runALM(counted, z0, { Vbar, lb, ub, onIter })
-                     : LBFGSB.minimize(z => counted(z).U, z0, lb, ub, { maxiter: 200, ftol: 1e-12, gtol: 1e-8, eps: 1e-4, onIter });
-    const res = LBFGSB.runSync(gen);
+    const gen = SLSQP.minimize(z => counted(z).U, useV ? (z => [Vbar - volOf(z)]) : (z => []), z0, lb, ub, { maxiter: 200, ftol: 1e-9, eps: 1e-4, onIter });
+    const res = SLSQP.runSync(gen);
     self.postMessage({ type: 'done', res, calls, t: (Date.now() - t0) / 1000 });
   } catch (err) { self.postMessage({ type: 'error', message: err.message }); }
 };`;
 const REASON = {
-  feas: '体積制約を満たして収束', inactive: '制約が効いていない状態で収束', dz: '形状の変化が十分小さくなり収束', maxouter: '外部反復の上限（30回）に到達',
+  0: '収束しました', 4: '線形化した制約が両立しないため終了', 8: '直線探索で降下方向が得られず終了', 9: '最大反復数（200回）に到達',
 };
 let optJob = null, optHist = [], optRunning = false;
 function lockUI(on) {
   optRunning = on;
-  document.querySelectorAll('#symSliders input, #jRec, #jRigid, #detailBox input, #detailBox button, #useVcon, #Vmax, #zLo, #zHi').forEach(el => { el.disabled = on; });
+  document.querySelectorAll('#symSliders input, #jRec, #jRigid, #detailBox input, #detailBox button, #useVcon, #alphaMax, #zLo, #zHi, #sphereBtn, #sphereH').forEach(el => { el.disabled = on; });
   if (!on) updateCond();
   $('runOpt').disabled = on || !boundsOK(); $('stopOpt').disabled = !on;
 }
@@ -1198,22 +1097,23 @@ function startOpt() {
   let calls = 0;
   const objUV = z => { const r = FEM.analyze({ ...p, ctrl: FEM.expandSym(z) }); return { U: r.C / 1000, V: r.volume }; };
   const counted = z => { calls++; return objUV(z); };
-  optHist = [objUV(state.z5)];
+  const Asec = p.A ?? FEM.section(p).A, aOf = V => V / (Asec * L0);
+  { const o = objUV(state.z5); optHist = [{ U: o.U, a: aOf(o.V) }]; }
   drawOptChart();
   lockUI(true);
   optStatus('計算中…');
   const t0 = performance.now();
   const showIter = it => {
     state.z5 = it.x.slice(); onShapeChange(); drawOptChart();
-    optStatus(`${useV ? `外部反復 <b>${it.outer}</b>　λ = ${it.lam.toFixed(4)}　ρ = ${it.rho}<br>` : ''}内部反復 ${it.nit}　解析 ${it.calls} 回　${it.t.toFixed(1)} s<br>C = <b>${it.U.toFixed(5)}</b> kN·m　V = ${it.V.toFixed(4)} m³`);
+    optStatus(`反復 <b>${it.nit}</b>　解析 ${it.calls} 回　${it.t.toFixed(1)} s<br>C = <b>${it.U.toFixed(5)}</b> kN·m　α = ${aOf(it.V).toFixed(4)}`);
   };
   const finish = (res, ncalls, t) => {
-    const z = useV ? res.z : res.x;
+    const z = res.x;
     const { U, V } = objUV(z);
     state.z5 = z.slice(); onShapeChange();
-    optHist.push({ U, V }); drawOptChart();
-    const why = useV ? (REASON[res.reason] || res.reason) : res.message;
-    optStatus(`完了：${why}<br>z = [${z.map(v => v.toFixed(3)).join(', ')}]<br>C = <b>${U.toFixed(5)}</b> kN·m　V = ${V.toFixed(4)} m³<br>${useV ? `外部反復 ${res.hist.length} 回　` : `反復 ${res.nit} 回　`}解析 ${ncalls} 回　${t.toFixed(1)} s`, true);
+    optHist.push({ U, a: aOf(V) }); drawOptChart();
+    const why = REASON[res.status] || res.message;
+    optStatus(`完了：${why}<br>z = [${z.map(v => v.toFixed(3)).join(', ')}]<br>C = <b>${U.toFixed(5)}</b> kN·m　α = ${aOf(V).toFixed(4)}<br>反復 ${res.nit} 回　解析 ${ncalls} 回　${t.toFixed(1)} s`, res.status === 0);
     optJob = null; lockUI(false);
   };
   const job = { stopped: false, worker: null };
@@ -1228,7 +1128,7 @@ function startOpt() {
       started = true;
       if (job.stopped) return;
       const d = e.data;
-      if (d.type === 'iter') { optHist.push({ U: d.U, V: d.V }); showIter(d); }
+      if (d.type === 'iter') { optHist.push({ U: d.U, a: aOf(d.V) }); showIter(d); }
       else if (d.type === 'done') { w.terminate(); finish(d.res, d.calls, d.t); }
       else if (d.type === 'error') { w.terminate(); optStatus('エラー：' + d.message); optJob = null; lockUI(false); }
     };
@@ -1239,10 +1139,9 @@ function startOpt() {
   runSliced();
   function runSliced() {
   let last = null;
-  const onIter = it => { last = { ...it, ...objUV(it.x), calls, t: (performance.now() - t0) / 1000 }; optHist.push({ U: last.U, V: last.V }); };
-  const gen = useV
-    ? runALM(counted, z0, { Vbar, lb, ub, onIter })
-    : LBFGSB.minimize(z => counted(z).U, z0, lb, ub, { maxiter: 200, ftol: 1e-12, gtol: 1e-8, eps: 1e-4, onIter });
+  const onIter = it => { last = { ...it, ...objUV(it.x), calls, t: (performance.now() - t0) / 1000 }; optHist.push({ U: last.U, a: aOf(last.V) }); };
+  const volOf = makeVolFn(p);
+  const gen = SLSQP.minimize(z => counted(z).U, useV ? (z => [Vbar - volOf(z)]) : (z => []), z0, lb, ub, { maxiter: 200, ftol: 1e-9, eps: 1e-4, onIter });
   const step = () => {
     if (job.stopped) return;
     const ts = performance.now();
@@ -1274,16 +1173,16 @@ function drawOptChart() {
   if (optHist.length < 1) return;
   const n = optHist.length, X = i => padL + (n === 1 ? 0 : i / (n - 1)) * (w - padL - padR);
   const range = arr => { let lo = Math.min(...arr), hi = Math.max(...arr); if (hi - lo < 1e-12) { hi += 1e-3; lo -= 1e-3; } const m = (hi - lo) * 0.08; return [lo - m, hi + m]; };
-  const Us = optHist.map(o => o.U), Vs = optHist.map(o => o.V).concat($('useVcon').checked ? [VMAX] : []);
+  const Us = optHist.map(o => o.U), Vs = optHist.map(o => o.a).concat($('useVcon').checked ? [ALPHA_MAX] : []);
   const [u0, u1] = range(Us), [v0, v1] = range(Vs);
   const YU = v => padT + (1 - (v - u0) / (u1 - u0)) * (h - padT - padB), YV = v => padT + (1 - (v - v0) / (v1 - v0)) * (h - padT - padB);
   ctx.fillStyle = muted; ctx.textBaseline = 'middle';
   ctx.textAlign = 'right'; ctx.fillText(u1.toPrecision(3), padL - 4, padT + 4); ctx.fillText(u0.toPrecision(3), padL - 4, h - padB - 4);
-  ctx.textAlign = 'left'; ctx.fillText(v1.toPrecision(3), w - padR + 4, padT + 4); ctx.fillText(v0.toPrecision(3), w - padR + 4, h - padB - 4);
+  ctx.textAlign = 'left'; ctx.fillText(v1.toFixed(3), w - padR + 4, padT + 4); ctx.fillText(v0.toFixed(3), w - padR + 4, h - padB - 4);
   ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(`反復 ${n - 1}`, w / 2, h - padB + 4);
-  if ($('useVcon').checked) { ctx.strokeStyle = muted; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(padL, YV(VMAX)); ctx.lineTo(w - padR, YV(VMAX)); ctx.stroke(); ctx.setLineDash([]); }
+  if ($('useVcon').checked) { ctx.strokeStyle = muted; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(padL, YV(ALPHA_MAX)); ctx.lineTo(w - padR, YV(ALPHA_MAX)); ctx.stroke(); ctx.setLineDash([]); }
   const plot = (arr, Y, col) => { ctx.strokeStyle = col; ctx.lineWidth = 1.8; ctx.beginPath(); arr.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))); ctx.stroke(); };
-  plot(optHist.map(o => o.V), YV, css('--ctrl'));
+  plot(optHist.map(o => o.a), YV, css('--ctrl'));
   plot(Us, YU, css('--accent'));
 }
 
@@ -1313,7 +1212,7 @@ new ResizeObserver(drawOptChart).observe($('optChart'));
 $('shSquare').onclick = () => setSection('square');
 $('shRound').onclick = () => setSection('round');
 $('resetCond').onclick = resetCond;
-['D', 't', 'solid', 'E', 'nu', 'useP', 'P', 'useSW', 'rho', 'Vmax'].forEach(id => $(id).addEventListener('input', () => { updateCond(); onShapeChange(); }));
+['D', 't', 'solid', 'E', 'nu', 'useP', 'P', 'useSW', 'rho', 'alphaMax'].forEach(id => $(id).addEventListener('input', () => { updateCond(); onShapeChange(); }));
 ['colorMode', 'showGhost', 'autoScale'].forEach(id => $(id).addEventListener('input', () => state.result && drawMembers()));
 $('showNet').addEventListener('input', drawCtrl);
 $('scale').addEventListener('input', () => { $('autoScale').checked = false; state.result && drawMembers(); });
@@ -1321,7 +1220,37 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', app
 new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); }
+// ---------- truncated spherical shell (裁断球殻) by least squares ----------
+// Sphere through the four corners with rise h at the centre: R = (d² + h²) / 2h, d = half diagonal.
+// Node heights are linear in z0..z4, so the best-fitting z0..z4 at the 11×11 nodes follow from the normal equations.
+function sphereFit(h) {
+  const half = SPAN / 2, d2 = 2 * half * half, R = (d2 + h * h) / (2 * h);
+  const cols = [0, 1, 2, 3, 4].map(k => { const z = [0, 0, 0, 0, 0]; z[k] = 1; return FEM.buildGeometry(N_CELL, CELL, FEM.expandSym(z)).X.filter((v, i) => i % 3 === 2); });
+  const g0 = FEM.buildGeometry(N_CELL, CELL, FEM.expandSym([0, 0, 0, 0, 0])).X;
+  const tgt = []; for (let q = 0; q < cols[0].length; q++) { const x = g0[3*q] - half, y = g0[3*q+1] - half; tgt.push(Math.sqrt(Math.max(0, R * R - x * x - y * y)) - (R - h)); }
+  const M = [0, 1, 2, 3, 4].map(a => [0, 1, 2, 3, 4].map(b => cols[a].reduce((s, v, q) => s + v * cols[b][q], 0)));
+  const rhs = [0, 1, 2, 3, 4].map(a => cols[a].reduce((s, v, q) => s + v * tgt[q], 0));
+  for (let c = 0; c < 5; c++) { let p = c; for (let r = c + 1; r < 5; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]]; [rhs[c], rhs[p]] = [rhs[p], rhs[c]];
+    for (let r = c + 1; r < 5; r++) { const f = M[r][c] / M[c][c]; for (let k = c; k < 5; k++) M[r][k] -= f * M[c][k]; rhs[r] -= f * rhs[c]; } }
+  const z = Array(5); for (let r = 4; r >= 0; r--) { let t = rhs[r]; for (let k = r + 1; k < 5; k++) t -= M[r][k] * z[k]; z[r] = t / M[r][r]; }
+  let maxErr = 0; for (let q = 0; q < tgt.length; q++) { let v = 0; for (let k = 0; k < 5; k++) v += cols[k][q] * z[k]; maxErr = Math.max(maxErr, Math.abs(v - tgt[q])); }
+  return { z, R, maxErr };
+}
+function applySphere() {
+  const h = parseFloat($('sphereH').value);
+  if (!(h > 0)) { $('sphereNote').textContent = 'ライズ h には正の値を入れてください。'; return; }
+  const { z, R, maxErr } = sphereFit(h);
+  const clipped = z.some(v => v < ZMIN || v > ZMAX);
+  state.z5 = z.map(v => Math.max(ZMIN, Math.min(ZMAX, v)));
+  onShapeChange();
+  $('sphereNote').textContent = `半径 R = ${R.toFixed(2)} m の球面を最小二乗近似（節点での最大誤差 ${(maxErr * 1000).toFixed(1)} mm）。`
+    + (clipped ? ' z の範囲外の値は範囲内に丸めました。' : '');
+}
+$('sphereBtn').onclick = applySphere;
+
 buildSliders();
+applySphere();
 resize(); applyTheme(); updateCond(); setJoint('reciprocal');
 loop();
 })();
